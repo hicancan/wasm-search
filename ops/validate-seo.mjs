@@ -93,6 +93,8 @@ for (const page of pages) {
 }
 
 const home = read('index.html');
+assert(home.includes('<meta name="msvalidate.01" content="E44C2F6A09F0A678DED98C8374E549A1" />'), 'index.html: missing Bing ownership verification');
+assert(home.includes('<meta name="baidu-site-verification" content="codeva-3WJsMJj16W" />'), 'index.html: missing Baidu ownership verification');
 for (const href of ['/search', '/community', '/materials', '/exam', '/timetable', '/classrooms']) {
     assert(home.includes(`href="${href}"`), `index.html: missing crawlable ${href} link`);
 }

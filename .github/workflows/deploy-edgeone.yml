@@ -108,6 +108,9 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Prepare verified product for middleware compilation
+        run: node .github/scripts/prepare-edgeone-project.mjs
+
       - name: Deploy to EdgeOne Makers
         env:
           EDGEONE_API_TOKEN: ${{ secrets.EDGEONE_API_TOKEN }}
@@ -122,7 +125,7 @@ jobs:
           project="${EDGEONE_PROJECT_NAME:-njupt-search}"
           area="${EDGEONE_PAGES_AREA:-global}"
           echo "Deploying verified CI artifact to EdgeOne Makers project '$project' in area '$area'."
-          bash .github/scripts/deploy-edgeone-with-retry.sh ./dist "$project" production "$area" edgeone-deploy.json
+          bash .github/scripts/deploy-edgeone-with-retry.sh "" "$project" production "$area" edgeone-deploy.json
           EDGEONE_DEPLOY_RESULT_PATH=edgeone-deploy.json \
           EDGEONE_PRODUCT_RUN_ID='${{ needs.resolve-edgeone.outputs.run_id }}' \
           EDGEONE_PROJECT="$project" \

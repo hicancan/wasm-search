@@ -56,6 +56,9 @@ try {
     Invoke-Checked {
         node --test .github/scripts/parse-edgeone-deploy-result.test.mjs
     } 'Deployment helper tests failed'
+    Invoke-Checked {
+        node --test middleware.test.mjs
+    } 'Query indexing middleware tests failed'
     if ($IsLinux) {
         Invoke-Checked {
             bash .github/scripts/github-retry.test.sh

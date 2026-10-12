@@ -89,6 +89,12 @@ export const renderPageHead = (seo: PageSeo): string => {
         `<title>${title}</title>`,
         `<meta name="description" content="${description}" />`,
         `<meta name="robots" content="${seo.indexable ? 'index, follow' : 'noindex, follow'}" />`,
+        seo.canonical === `${SITE_ORIGIN}/`
+            ? '<meta name="msvalidate.01" content="E44C2F6A09F0A678DED98C8374E549A1" />'
+            : '',
+        seo.canonical === `${SITE_ORIGIN}/`
+            ? '<meta name="baidu-site-verification" content="codeva-3WJsMJj16W" />'
+            : '',
         seo.canonical ? `<link rel="canonical" href="${seo.canonical}" />` : '',
         '<meta property="og:site_name" content="njupt-search" />',
         `<meta property="og:title" content="${title}" />`,

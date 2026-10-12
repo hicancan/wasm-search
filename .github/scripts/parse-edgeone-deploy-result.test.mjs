@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { parseEdgeOneDeployResult } from './parse-edgeone-deploy-result.mjs';
+import { createEdgeOneProjectConfig } from './prepare-edgeone-project.mjs';
 
 const success = {
   status: 'success',
@@ -66,6 +67,30 @@ test('deployment retry recognizes the Axios region timeout seen in production', 
   assert.ok(deployScript.includes('AxiosError: timeout'));
   assert.ok(deployScript.includes('timeout of [0-9]+ms exceeded'));
   assert.ok(deployScript.includes('ECONNABORTED'));
+});
+
+test('project deployment compiles middleware and retains the verified artifact configuration', () => {
+  const artifactConfig = JSON.parse(readFileSync(new URL('../../apps/web/public/edgeone.json', import.meta.url), 'utf8'));
+  const projectConfig = createEdgeOneProjectConfig(artifactConfig);
+
+  assert.deepEqual(projectConfig.redirects, artifactConfig.redirects);
+  assert.deepEqual(projectConfig.rewrites, artifactConfig.rewrites);
+  assert.deepEqual(projectConfig.headers, artifactConfig.headers);
+  assert.equal(projectConfig.outputDirectory, 'dist');
+  assert.equal(projectConfig.buildCommand, 'node ops/validate-seo.mjs --dist dist');
+  assert.equal(projectConfig.installCommand, 'node --version');
+  assert.equal(artifactConfig.buildCommand, undefined);
+
+  const preparation = readFileSync(new URL('./prepare-edgeone-project.mjs', import.meta.url), 'utf8');
+  assert.match(preparation, /readFileSync\('dist\/edgeone\.json'/u);
+  const workflow = readFileSync(new URL('../workflows/deploy-edgeone.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /node \.github\/scripts\/prepare-edgeone-project\.mjs/u);
+  assert.match(workflow, /deploy-edgeone-with-retry\.sh "" "\$project" production "\$area"/u);
+  assert.doesNotMatch(workflow, /deploy-edgeone-with-retry\.sh \.\/dist/u);
+
+  const deployScript = readFileSync(new URL('./deploy-edgeone-with-retry.sh', import.meta.url), 'utf8');
+  assert.match(deployScript, /if \[ -n "\$dist_dir" \]; then\s+deploy_command\+=\("\$dist_dir"\)/u);
+  assert.match(deployScript, /PAGES_SOURCE=skills "\$\{deploy_command\[@\]\}"/u);
 });
 
 test('artifact pointer workflows use the GitHub variable retry wrapper', () => {
