@@ -2,7 +2,7 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import initWasm, { compile } from '../wasm/wasm_search_wasm.js';
-import type { Profile, SearchDocument } from './model';
+import type { Profile, SearchDocument } from './model.js';
 
 let ready: Promise<unknown> | null = null;
 

@@ -1,4 +1,4 @@
-import type { FilterOptions, Query, SearchResponse } from './model';
+import type { FilterOptions, Query, SearchResponse } from './model.js';
 
 export type SearchWorkerRequest =
     | {

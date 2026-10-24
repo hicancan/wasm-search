@@ -1,5 +1,5 @@
-export { SearchClient } from './client';
-export type { SearchClientOptions, SearchClientReady } from './client';
+export { SearchClient } from './client.js';
+export type { SearchClientOptions, SearchClientReady } from './client.js';
 export type {
     Alias,
     DocumentKind,
@@ -13,4 +13,4 @@ export type {
     SearchResponse,
     SearchResult,
     SortMode,
-} from './model';
+} from './model.js';

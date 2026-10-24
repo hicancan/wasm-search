@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CacheStore } from './cache';
+import { CacheStore } from './cache.js';
 
 describe('CacheStore', () => {
     it('evicts least recently used artifacts within its byte budget', () => {

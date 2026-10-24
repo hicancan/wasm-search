@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ArtifactSource } from './artifacts';
-import { CacheStore } from './cache';
-import type { ArtifactRef, SearchBundleManifest } from './artifacts';
+import { ArtifactSource } from './artifacts.js';
+import { CacheStore } from './cache.js';
+import type { ArtifactRef, SearchBundleManifest } from './artifacts.js';
 
 const bytes = new Uint8Array([1, 2, 3]);
 const reference: ArtifactRef = { path: 'documents.bin', bytes: bytes.byteLength, decoded_bytes: 3 };

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { SearchClient } from './client';
-import type { SearchWorkerRequest, SearchWorkerResponse } from './protocol';
+import { SearchClient } from './client.js';
+import type { SearchWorkerRequest, SearchWorkerResponse } from './protocol.js';
 
 class FakeWorker {
     static instances: FakeWorker[] = [];

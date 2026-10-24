@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
 
-import { ArtifactSource } from './artifacts';
-import { CacheStore } from './cache';
-import { SearchRuntime } from './runtime';
-import type { SearchWorkerRequest, SearchWorkerResponse } from './protocol';
+import { ArtifactSource } from './artifacts.js';
+import { CacheStore } from './cache.js';
+import { SearchRuntime } from './runtime.js';
+import type { SearchWorkerRequest, SearchWorkerResponse } from './protocol.js';
 
 const scope = self as DedicatedWorkerGlobalScope;
 let runtime: SearchRuntime | null = null;

@@ -1,17 +1,29 @@
 {
   "name": "wasm-search",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Full-text search that runs in the browser: a Rust engine compiled to WebAssembly, with bundles built in Node",
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-    "./compile": { "types": "./dist/compile.d.ts", "default": "./dist/compile.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./compile": {
+      "types": "./dist/compile.d.ts",
+      "default": "./dist/compile.js"
+    }
   },
-  "files": ["dist", "wasm/wasm_search_wasm.js", "wasm/wasm_search_wasm.d.ts", "wasm/wasm_search_wasm_bg.wasm", "wasm/wasm_search_wasm_bg.wasm.d.ts"],
+  "files": [
+    "dist",
+    "wasm/wasm_search_wasm.js",
+    "wasm/wasm_search_wasm.d.ts",
+    "wasm/wasm_search_wasm_bg.wasm",
+    "wasm/wasm_search_wasm_bg.wasm.d.ts"
+  ],
   "scripts": {
     "build:wasm": "wasm-pack build ../wasm --release --target web --out-dir ../js/wasm --out-name wasm_search_wasm --no-pack",
-    "build": "npm run build:wasm && tsc -p tsconfig.build.json",
+    "build": "npm run build:wasm && tsc -p tsconfig.build.json && node -e \"Promise.all([import('./dist/index.js'), import('./dist/compile.js')])\"",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

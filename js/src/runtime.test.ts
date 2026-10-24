@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ArtifactRef, SearchBundleManifest } from './artifacts';
+import type { ArtifactRef, SearchBundleManifest } from './artifacts.js';
 
 const engine = vi.hoisted(() => ({
     clearContent: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock('../wasm/wasm_search_wasm.js', () => ({
     },
 }));
 
-import { SearchRuntime } from './runtime';
+import { SearchRuntime } from './runtime.js';
 
 const artifact = (path: string, decodedBytes = 4): ArtifactRef => ({
     path,

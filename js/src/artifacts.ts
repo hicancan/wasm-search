@@ -1,5 +1,5 @@
-import { CacheStore } from './cache';
-import type { Profile } from './model';
+import { CacheStore } from './cache.js';
+import type { Profile } from './model.js';
 
 export interface ArtifactRef {
     path: string;

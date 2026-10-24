@@ -1,5 +1,5 @@
-import type { FilterOptions, Query, SearchResponse } from './model';
-import type { SearchWorkerRequest, SearchWorkerResponse } from './protocol';
+import type { FilterOptions, Query, SearchResponse } from './model.js';
+import type { SearchWorkerRequest, SearchWorkerResponse } from './protocol.js';
 
 export interface SearchClientReady {
     documentCount: number;

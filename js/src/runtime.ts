@@ -1,6 +1,6 @@
 import initWasm, { SearchEngine as WasmSearchEngine } from '../wasm/wasm_search_wasm.js';
-import { ArtifactSource, type ArtifactRef, type SearchBundleManifest } from './artifacts';
-import type { FilterOptions, Query, SearchResponse } from './model';
+import { ArtifactSource, type ArtifactRef, type SearchBundleManifest } from './artifacts.js';
+import type { FilterOptions, Query, SearchResponse } from './model.js';
 
 export class SearchRuntime {
     private readonly source: ArtifactSource;
