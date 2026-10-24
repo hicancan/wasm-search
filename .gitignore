@@ -1,37 +1,6 @@
-# Dependencies and Python byproducts
+/target/
 node_modules/
-.venv/
-__pycache__/
-*.py[cod]
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-
-# Rebuildable JavaScript and Rust outputs
-dist/
-coverage/
-/search/target/
-/search/browser/wasm/
-
-# Local runtime files and secrets
 *.log
-*.tmp
-.env
-.env.local
-.env*.local
-
-# Editors and operating systems
 .vscode/
 .idea/
 .DS_Store
-AGENTS.md
-
-# Android and Gradle
-/apps/android/.gradle/
-/apps/android/build/
-/apps/android/app/build/
-/apps/android/local.properties
-*.keystore

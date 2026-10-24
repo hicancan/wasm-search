@@ -4,42 +4,19 @@ on:
   pull_request:
   push:
     branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: npm
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - uses: astral-sh/setup-uv@v8.2.0
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-
-      - name: Install dependencies
-        run: |
-          npm ci
-          uv sync --frozen --extra test
-          cargo install wasm-pack --version 0.15.0 --locked
-
-      - name: Test the production implementations
-        shell: pwsh
-        run: ./ops/test.ps1 -Mode quick
+      - run: cargo test --workspace
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: cargo install wasm-pack --locked --version 0.15.0
+      - working-directory: js
+        run: npm install && npm run build && npm test
