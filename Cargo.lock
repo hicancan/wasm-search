@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-search"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-search-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "ruzstd",
  "serde",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-search-wasm"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde_json",
  "wasm-bindgen",

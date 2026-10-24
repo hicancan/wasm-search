@@ -34,12 +34,21 @@ afterEach(() => {
 });
 
 describe('SearchClient', () => {
+    it('starts no worker until it is first used', () => {
+        vi.stubGlobal('Worker', FakeWorker);
+        const client = new SearchClient({ baseUrl: '/search' });
+        expect(FakeWorker.instances).toHaveLength(0);
+        void client.initialize().catch(() => undefined);
+        expect(FakeWorker.instances).toHaveLength(1);
+        client.dispose();
+    });
+
     it('delivers stable ranked shells before resolving hydrated results', async () => {
         vi.stubGlobal('Worker', FakeWorker);
         const client = new SearchClient({ baseUrl: '/explicit/search' });
+        const ready = client.initialize();
         const worker = FakeWorker.instances[0];
         if (!worker) throw new Error('SearchClient did not create its Worker');
-        const ready = client.initialize();
         worker.emit({
             type: 'ready',
             documentCount: 12,
@@ -80,10 +89,9 @@ describe('SearchClient', () => {
             cacheBudgetBytes: 1024,
             workingSetBudgetBytes: 512,
         });
+        const ready = client.initialize();
         const worker = FakeWorker.instances[0];
         if (!worker) throw new Error('SearchClient did not create its Worker');
-
-        const ready = client.initialize();
         expect(worker.messages).toEqual([{
             type: 'init',
             baseUrl: '/explicit/search',
@@ -124,10 +132,9 @@ describe('SearchClient', () => {
     it('can retry failed initialization and rejects readiness on disposal', async () => {
         vi.stubGlobal('Worker', FakeWorker);
         const client = new SearchClient({ baseUrl: '/explicit/search' });
+        const first = client.initialize();
         const worker = FakeWorker.instances[0];
         if (!worker) throw new Error('SearchClient did not create its Worker');
-
-        const first = client.initialize();
         worker.emit({ type: 'error', message: 'bad manifest' });
         await expect(first).rejects.toThrow('bad manifest');
 
@@ -140,9 +147,9 @@ describe('SearchClient', () => {
     it('rejects every pending request when its owned worker fails', async () => {
         vi.stubGlobal('Worker', FakeWorker);
         const client = new SearchClient({ baseUrl: '/explicit/search' });
+        const ready = client.initialize();
         const worker = FakeWorker.instances[0];
         if (!worker) throw new Error('SearchClient did not create its Worker');
-        const ready = client.initialize();
         const pending = client.search({
             query: '期末考试',
             limit: 10,
@@ -160,10 +167,9 @@ describe('SearchClient', () => {
     it('reinitializes the owned runtime and rejects in-flight work', async () => {
         vi.stubGlobal('Worker', FakeWorker);
         const client = new SearchClient({ baseUrl: '/explicit/search' });
+        const firstReady = client.initialize();
         const worker = FakeWorker.instances[0];
         if (!worker) throw new Error('SearchClient did not create its Worker');
-
-        const firstReady = client.initialize();
         worker.emit({
             type: 'ready',
             documentCount: 12,

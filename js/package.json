@@ -1,6 +1,6 @@
 {
   "name": "wasm-search",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Full-text search that runs in the browser: a Rust engine compiled to WebAssembly, with bundles built in Node",
   "license": "AGPL-3.0-only",
   "type": "module",

@@ -24,7 +24,7 @@ export interface SearchClientOptions {
 }
 
 export class SearchClient {
-    private readonly worker: Worker;
+    private worker: Worker | null = null;
     private readonly options: Required<SearchClientOptions>;
     private state: ClientState = 'idle';
     private readyPromise: Promise<SearchClientReady> | null = null;
@@ -42,9 +42,6 @@ export class SearchClient {
             cacheBudgetBytes: options.cacheBudgetBytes ?? 64 * MIB,
             workingSetBudgetBytes: options.workingSetBudgetBytes ?? 48 * MIB,
         };
-        this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
-        this.worker.onmessage = (event: MessageEvent<SearchWorkerResponse>) => this.receive(event.data);
-        this.worker.onerror = event => this.fail(new Error(event.message || 'search worker failed'));
     }
 
     initialize(): Promise<SearchClientReady> {
@@ -119,7 +116,8 @@ export class SearchClient {
         this.readyPromise = null;
         this.readyValue = null;
         this.state = 'disposed';
-        this.worker.terminate();
+        this.worker?.terminate();
+        this.worker = null;
     }
 
     private rejectPending(error: Error): void {
@@ -142,7 +140,13 @@ export class SearchClient {
         this.rejectPending(error);
     }
 
+    /** The worker starts on first use, so constructing a client has no side effects (and works during SSR). */
     private post(message: SearchWorkerRequest): void {
+        if (!this.worker) {
+            this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+            this.worker.onmessage = (event: MessageEvent<SearchWorkerResponse>) => this.receive(event.data);
+            this.worker.onerror = event => this.fail(new Error(event.message || 'search worker failed'));
+        }
         this.worker.postMessage(message);
     }
 
