@@ -23,4 +23,6 @@ jobs:
         run: npm install && npm run build && npm test && npm pack
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" js/wasm-search-*.tgz --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          gh release upload "$GITHUB_REF_NAME" js/wasm-search-*.tgz --clobber \
+            || gh release create "$GITHUB_REF_NAME" js/wasm-search-*.tgz --title "$GITHUB_REF_NAME" --generate-notes
