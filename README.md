@@ -5,6 +5,8 @@ analysis, an inverted index, tiered ranking and snippets — compiled to
 WebAssembly. Bundles are built in Node (or with the CLI) from a JSON-lines file
 and served as static files; the browser downloads only the chunks a query needs.
 
+**Production Deployment & Live Demo:** [https://studev.hicancan.top/search/](https://studev.hicancan.top/search/)
+
 ```text
 documents.jsonl + profile.json ──compile──► bundle/ ──static hosting──► SearchClient (Worker + WASM)
 ```
