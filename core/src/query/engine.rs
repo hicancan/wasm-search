@@ -29,7 +29,9 @@ pub struct SearchEngine {
 enum MatchTier {
     Partial,
     MinimumShouldMatch,
+    PinyinBody,
     AllBodyTerms,
+    PinyinTitle,
     AllTitleTerms,
     TitleContains,
     TitleStartsWith,
@@ -41,8 +43,8 @@ impl MatchTier {
         match self {
             Self::TitleEquals | Self::TitleStartsWith | Self::TitleContains => 5,
             Self::AllTitleTerms => 4,
-            Self::AllBodyTerms => 3,
-            Self::MinimumShouldMatch => 2,
+            Self::AllBodyTerms | Self::PinyinTitle => 3,
+            Self::MinimumShouldMatch | Self::PinyinBody => 2,
             Self::Partial => 1,
         }
     }
@@ -75,6 +77,9 @@ fn display_terms(terms: BTreeSet<String>) -> Vec<String> {
     });
     let mut selected: Vec<String> = Vec::new();
     for term in terms {
+        if term.starts_with(crate::pinyin::PREFIX) {
+            continue;
+        }
         if selected.iter().any(|longer| longer.contains(&term)) {
             continue;
         }
@@ -400,6 +405,22 @@ impl SearchEngine {
             })
             .max()
             .unwrap_or(MatchTier::Partial);
+
+        // Transliteration is a fallback below literal Chinese/Latin title
+        // matches, independent of publication date and repetition counts.
+        if state
+            .title_terms
+            .iter()
+            .any(|term| term.starts_with(crate::pinyin::PREFIX))
+        {
+            tier = tier.max(MatchTier::PinyinTitle);
+        } else if state
+            .body_terms
+            .iter()
+            .any(|term| term.starts_with(crate::pinyin::PREFIX))
+        {
+            tier = tier.max(MatchTier::PinyinBody);
+        }
 
         if self.documents[document_index].kind == DocumentKind::Link
             && tier > MatchTier::MinimumShouldMatch

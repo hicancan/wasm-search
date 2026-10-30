@@ -59,6 +59,21 @@ const { totalCandidates, results } = await client.search(
 Bundles are immutable: serve each build from its own directory and cache it
 forever.
 
+## Pinyin
+
+Bundle compilation uses a generic, plain-syllable character dictionary to add
+full pinyin and initials to the inverted index. For example, `图书馆` matches
+`tushuguan`, `tu shu guan` and `tsg`; `教3` matches `jiao3` and `j3`.
+Queries are case insensitive, and `ü` can also be entered as `v`. Literal title matches retain higher relevance
+than transliterations, and snippets never expose internal transliteration terms.
+No corpus aliases or client-side title scans are required; both WASM and Android
+consume the same compiled postings. Recompile existing bundles to enable pinyin.
+
+The table uses one default pronunciation per character, without contextual
+polyphone disambiguation. Chinese windows retain the normal index limits
+(four title characters / two body characters), plus a complete name up to 32
+characters. This bounds index growth for long prose while supporting full names.
+
 ## Android
 
 With Rust's Android targets, cargo-ndk, the Android NDK and JDK installed, run
