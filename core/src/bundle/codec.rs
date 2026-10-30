@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn decoder_rejects_trailing_bytes() {
-        let mut bytes = encode_lexicon(&[("南邮".to_string(), 0)]);
+        let mut bytes = encode_lexicon(&[("示例".to_string(), 0)]);
         bytes.push(0);
         assert_eq!(
             decode_lexicon(&bytes).unwrap_err(),

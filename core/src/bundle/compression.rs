@@ -41,7 +41,7 @@ mod tests {
 
     #[test]
     fn round_trips_and_bounds_zstd_artifacts() {
-        let input = b"njupt search artifact".repeat(512);
+        let input = b"search artifact sample".repeat(512);
         let encoded = compress_artifact(&input);
         assert_eq!(
             decompress_artifact(&encoded, input.len() as u64).expect("decompress"),

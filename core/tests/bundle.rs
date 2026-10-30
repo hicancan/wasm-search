@@ -8,8 +8,8 @@ fn documents() -> Vec<IndexDocument> {
     vec![
         IndexDocument {
             id: "doc-a".to_string(),
-            source: "jwc".to_string(),
-            source_name: "教务处".to_string(),
+            source: "office".to_string(),
+            source_name: "办公室".to_string(),
             url: "https://example.test/a".to_string(),
             title: "转专业办理通知".to_string(),
             content: "转专业 转专业 申请材料与办理流程".to_string(),
@@ -28,7 +28,7 @@ fn documents() -> Vec<IndexDocument> {
         IndexDocument {
             id: "doc-b".to_string(),
             source: "www".to_string(),
-            source_name: "南邮主页".to_string(),
+            source_name: "主页".to_string(),
             url: "https://example.test/b".to_string(),
             title: "校园新闻".to_string(),
             content: "学校新闻动态".to_string(),
@@ -42,8 +42,8 @@ fn documents() -> Vec<IndexDocument> {
         },
         IndexDocument {
             id: "doc-c".to_string(),
-            source: "jwc".to_string(),
-            source_name: "教务处".to_string(),
+            source: "office".to_string(),
+            source_name: "办公室".to_string(),
             url: "https://example.test/c".to_string(),
             title: "专业建设实施方案".to_string(),
             content: "专业 专业 专业 专业 专业 专业 专业 专业".to_string(),
@@ -212,15 +212,15 @@ fn filter_options_keep_category_counts_scoped_to_each_source() {
         compile_search_bundle(categorized(documents()), Profile::default()).expect("compile");
     let options = engine(&bundle).filter_options();
 
-    let jwc = options
+    let office = options
         .categories_by_source
-        .get("jwc")
-        .expect("jwc categories");
+        .get("office")
+        .expect("office categories");
     let www = options
         .categories_by_source
         .get("www")
         .expect("www categories");
-    assert_eq!(jwc.iter().map(|facet| facet.count).sum::<usize>(), 2);
+    assert_eq!(office.iter().map(|facet| facet.count).sum::<usize>(), 2);
     assert_eq!(www.iter().map(|facet| facet.count).sum::<usize>(), 1);
     assert_eq!(
         options
@@ -338,10 +338,10 @@ fn excluded_sources_keep_product_scopes_disjoint() {
 fn result_page_does_not_repeat_same_day_department_reposts() {
     let mut values = documents();
     values.push(IndexDocument {
-        id: "contest-jwc".to_string(),
-        source: "jwc".to_string(),
-        source_name: "教务处".to_string(),
-        url: "https://jwc.example.test/contest".to_string(),
+        id: "contest-office".to_string(),
+        source: "office".to_string(),
+        source_name: "办公室".to_string(),
+        url: "https://office.example.test/contest".to_string(),
         title: "【实践科】2026年全国大学生数学建模竞赛报名通知".to_string(),
         content: "数学建模竞赛报名".to_string(),
         published_at: Some("2026-05-25".to_string()),
