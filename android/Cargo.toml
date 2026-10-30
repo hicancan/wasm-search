@@ -1,0 +1,21 @@
+[package]
+name = "wasm-search-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+serde_json.workspace = true
+uniffi = "0.32"
+wasm-search-core = { path = "../core" }
