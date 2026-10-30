@@ -197,3 +197,55 @@ fn compile_mirrors_the_wasm_bundle_helpers() {
     assert!(compile("invalid".into(), PROFILE.into()).is_err());
     assert!(compile(DOCUMENTS.into(), "invalid".into()).is_err());
 }
+
+#[test]
+fn pinyin_uses_the_same_compiled_postings_through_android() {
+    let documents = r#"
+{"id":"library","source":"places","source_name":"Places","url":"https://example.test/library","title":"图书馆","text":"借阅与学习"}
+{"id":"classroom","source":"places","source_name":"Places","url":"https://example.test/classroom","title":"教3","text":"教学"}
+{"id":"literal","source":"places","source_name":"Places","url":"https://example.test/literal","title":"tsg","text":"Latin title"}
+"#;
+    let bundle = compile_search_bundle(
+        documents
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect(),
+        Default::default(),
+    )
+    .unwrap();
+    let android = engine(&bundle);
+    for (query, expected) in [
+        ("tushuguan", "library"),
+        ("tu shu guan", "library"),
+        ("TSG", "literal"),
+        ("jiao3", "classroom"),
+        ("j3", "classroom"),
+        ("图书馆", "library"),
+    ] {
+        for chunk in chunks(
+            &android
+                .begin_search(json!({"query":query}).to_string())
+                .unwrap(),
+        ) {
+            let reference = &bundle.manifest.postings[chunk as usize];
+            android
+                .load_postings_chunk(chunk, bytes(&bundle, reference), decoded_bytes(reference))
+                .unwrap();
+        }
+        let result = value(&android.prepare_search().unwrap());
+        assert_eq!(result["results"][0]["id"], expected, "{query}");
+        if query == "TSG" {
+            assert_eq!(result["results"][1]["id"], "library");
+        }
+        for chunk in chunks(&android.required_content_chunks(0, 10).unwrap()) {
+            let reference = &bundle.manifest.content[chunk as usize];
+            android
+                .load_content_chunk(chunk, bytes(&bundle, reference), decoded_bytes(reference))
+                .unwrap();
+        }
+        let hydrated = value(&android.hydrate_search(0, 10).unwrap());
+        assert_eq!(hydrated["results"][0]["id"], expected);
+        assert!(!hydrated.to_string().contains("py:"));
+    }
+}

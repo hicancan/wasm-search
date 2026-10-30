@@ -1,6 +1,7 @@
 mod analysis;
 mod bundle;
 mod document;
+mod pinyin;
 mod profile;
 mod query;
 mod session;
