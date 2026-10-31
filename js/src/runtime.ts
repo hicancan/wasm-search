@@ -11,8 +11,10 @@ export class SearchRuntime {
     private engine: WasmSearchEngine | null = null;
     private readonly loadedPostings = new Map<string, number>();
     private readonly loadedLexiconBlocks = new Map<string, number>();
+    private readonly loadedDocumentBlocks = new Map<string, number>();
     private postingsBytes = 0;
     private lexiconBytes = 0;
+    private documentBytes = 0;
     private metadataBytes = 0;
 
     constructor(source: ArtifactSource, workingSetBudgetBytes: number) {
@@ -32,12 +34,12 @@ export class SearchRuntime {
             initWasm(),
             this.source.manifest(signal),
         ]);
-        this.metadataBytes = manifest.documents.decoded_bytes + manifest.lexicon.index.decoded_bytes;
+        this.metadataBytes = manifest.documents.index.decoded_bytes + manifest.lexicon.index.decoded_bytes;
         if (this.metadataBytes > this.workingSetBudgetBytes) {
             throw new Error('search metadata exceeds the search memory budget');
         }
         const [documents, lexiconIndex] = await Promise.all([
-            this.source.bytes(manifest.documents, signal),
+            this.source.bytes(manifest.documents.index, signal),
             this.source.bytes(manifest.lexicon.index, signal),
         ]);
         signal?.throwIfAborted();
@@ -67,15 +69,17 @@ export class SearchRuntime {
         this.engine?.free();
         this.engine = new WasmSearchEngine(
             new Uint8Array(this.documents),
-            this.requireManifest().documents.decoded_bytes,
+            this.requireManifest().documents.index.decoded_bytes,
             new Uint8Array(this.lexiconIndex),
             this.requireManifest().lexicon.index.decoded_bytes,
             JSON.stringify(this.requireManifest().profile),
         );
         this.loadedPostings.clear();
         this.loadedLexiconBlocks.clear();
+        this.loadedDocumentBlocks.clear();
         this.postingsBytes = 0;
         this.lexiconBytes = 0;
+        this.documentBytes = 0;
     }
 
     private references(kind: 'postings' | 'content', chunks: number[]): ArtifactRef[] {
@@ -101,6 +105,14 @@ export class SearchRuntime {
             .reduce((total, reference) => total + reference.decoded_bytes, 0);
     }
 
+    private missingDocumentBytes(blocks: number[]): number {
+        return blocks
+            .map(block => this.requireManifest().documents.blocks[block])
+            .filter((reference): reference is ArtifactRef => Boolean(reference))
+            .filter(reference => !this.loadedDocumentBlocks.has(reference.path))
+            .reduce((total, reference) => total + reference.decoded_bytes, 0);
+    }
+
     private async loadLexiconBlocks(blocks: number[], signal?: AbortSignal): Promise<void> {
         const missing = blocks
             .map((block) => ({ block, reference: this.requireManifest().lexicon.blocks[block] }))
@@ -119,6 +131,27 @@ export class SearchRuntime {
             );
             this.loadedLexiconBlocks.set(item.reference.path, item.reference.decoded_bytes);
             this.lexiconBytes += item.reference.decoded_bytes;
+        }
+    }
+
+    private async loadDocumentBlocks(blocks: number[], signal?: AbortSignal): Promise<void> {
+        const missing = blocks
+            .map((block) => ({ block, reference: this.requireManifest().documents.blocks[block] }))
+            .filter(item => item.reference && !this.loadedDocumentBlocks.has(item.reference.path));
+        const loaded = await Promise.all(missing.map(async item => ({
+            ...item,
+            bytes: await this.source.bytes(item.reference, signal),
+        })));
+        signal?.throwIfAborted();
+        const engine = this.requireEngine();
+        for (const item of loaded) {
+            engine.load_document_block(
+                item.block,
+                new Uint8Array(item.bytes),
+                item.reference.decoded_bytes,
+            );
+            this.loadedDocumentBlocks.set(item.reference.path, item.reference.decoded_bytes);
+            this.documentBytes += item.reference.decoded_bytes;
         }
     }
 
@@ -162,6 +195,12 @@ export class SearchRuntime {
             throw new Error('query postings exceed the search memory budget');
         }
         await this.loadPostings(chunks, signal);
+        const documentBlocks = JSON.parse(this.requireEngine().required_document_blocks()) as number[];
+        const missingDocumentBytes = this.missingDocumentBytes(documentBlocks);
+        if (this.metadataBytes + this.lexiconBytes + this.documentBytes + this.postingsBytes + missingDocumentBytes > this.workingSetBudgetBytes) {
+            throw new Error('query document blocks exceed the search memory budget');
+        }
+        await this.loadDocumentBlocks(documentBlocks, signal);
     }
 
     private async loadContent(chunks: number[], signal?: AbortSignal): Promise<void> {
@@ -170,7 +209,7 @@ export class SearchRuntime {
             (total, reference) => total + reference.decoded_bytes,
             0,
         );
-        if (this.metadataBytes + this.lexiconBytes + this.postingsBytes + decodedBytes > this.workingSetBudgetBytes) {
+        if (this.metadataBytes + this.lexiconBytes + this.documentBytes + this.postingsBytes + decodedBytes > this.workingSetBudgetBytes) {
             throw new Error('query content exceeds the search memory budget');
         }
         const loaded = await Promise.all(references.map(async (reference, index) => ({
@@ -226,8 +265,10 @@ export class SearchRuntime {
         this.lexiconIndex = null;
         this.loadedPostings.clear();
         this.loadedLexiconBlocks.clear();
+        this.loadedDocumentBlocks.clear();
         this.postingsBytes = 0;
         this.lexiconBytes = 0;
+        this.documentBytes = 0;
         this.metadataBytes = 0;
     }
 }

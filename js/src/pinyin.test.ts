@@ -15,7 +15,7 @@ it('compiles pinyin once and searches full, spaced, initial and mixed digit quer
     const bundle = compile(documents.map(document => JSON.stringify(document)).join('\n'), '{}');
     const manifest = JSON.parse(bundle.manifest_json());
     const files = new Map(Array.from({ length: bundle.file_count() }, (_, index) => [bundle.file_path(index), bundle.file_bytes(index)]));
-    const engine = new SearchEngine(files.get(manifest.documents.path)!, manifest.documents.decoded_bytes,
+    const engine = new SearchEngine(files.get(manifest.documents.index.path)!, manifest.documents.index.decoded_bytes,
         files.get(manifest.lexicon.index.path)!, manifest.lexicon.index.decoded_bytes, '{}');
     try {
         for (const [query, expected] of [['tushuguan', 'library'], ['tu shu guan', 'library'],
@@ -27,6 +27,10 @@ it('compiles pinyin once and searches full, spaced, initial and mixed digit quer
             for (const chunk of JSON.parse(engine.required_posting_chunks())) {
                 const reference = manifest.postings[chunk];
                 engine.load_postings_chunk(chunk, files.get(reference.path)!, reference.decoded_bytes);
+            }
+            for (const block of JSON.parse(engine.required_document_blocks())) {
+                const reference = manifest.documents.blocks[block];
+                engine.load_document_block(block, files.get(reference.path)!, reference.decoded_bytes);
             }
             const shells = JSON.parse(engine.prepare_search());
             expect(shells.results[0].id, query).toBe(expected);

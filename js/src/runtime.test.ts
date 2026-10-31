@@ -6,6 +6,7 @@ const engine = vi.hoisted(() => ({
     clearContent: vi.fn(),
     free: vi.fn(),
     loadedContent: vi.fn(),
+    loadedDocuments: vi.fn(),
     loadedPostings: vi.fn(),
 }));
 
@@ -25,6 +26,8 @@ vi.mock('../wasm/wasm_search_wasm.js', () => ({
             });
         }
         required_content_chunks() { return JSON.stringify([0]); }
+        required_document_blocks() { return JSON.stringify([0]); }
+        load_document_block(...args: unknown[]) { engine.loadedDocuments(...args); }
         load_content_chunk(...args: unknown[]) { engine.loadedContent(...args); }
         hydrate_search() {
             return JSON.stringify({
@@ -47,7 +50,7 @@ const artifact = (path: string, decodedBytes = 4): ArtifactRef => ({
 
 const manifest: SearchBundleManifest = {
     format: 'wasm-search-bundle-v2',
-    documents: artifact('documents.bin'),
+    documents: { index: artifact('documents-index.bin'), blocks: [artifact('documents-0000.bin')] },
     lexicon: { index: artifact('lexicon-index.bin'), blocks: [artifact('lexicon-0000.bin')] },
     postings: [artifact('postings-0000.bin')],
     content: [artifact('content-0000.bin')],
@@ -107,7 +110,7 @@ describe('SearchRuntime', () => {
     it('rejects metadata that cannot fit in the decoded working-set budget', async () => {
         const oversized = {
             ...manifest,
-            documents: artifact('documents.bin', 800),
+            documents: { index: artifact('documents-index.bin', 800), blocks: [artifact('documents-0000.bin')] },
             lexicon: { index: artifact('lexicon-index.bin', 400), blocks: [artifact('lexicon-0000.bin')] },
         };
         const runtime = new SearchRuntime(source({

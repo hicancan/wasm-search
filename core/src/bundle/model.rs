@@ -20,9 +20,16 @@ pub struct LexiconManifest {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct DocumentManifest {
+    pub index: ArtifactRef,
+    pub blocks: Vec<ArtifactRef>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SearchBundleManifest {
     pub format: String,
-    pub documents: ArtifactRef,
+    pub documents: DocumentManifest,
     pub lexicon: LexiconManifest,
     pub postings: Vec<ArtifactRef>,
     pub content: Vec<ArtifactRef>,

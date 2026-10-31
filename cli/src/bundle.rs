@@ -18,8 +18,8 @@ pub fn load_engine(bundle: &Path) -> Result<SearchEngine> {
         bail!("unsupported bundle format {}", manifest.format);
     }
     let mut engine = SearchEngine::new(
-        &read(bundle, &manifest.documents)?,
-        manifest.documents.decoded_bytes,
+        &read(bundle, &manifest.documents.index)?,
+        manifest.documents.index.decoded_bytes,
         &read(bundle, &manifest.lexicon.index)?,
         manifest.lexicon.index.decoded_bytes,
         manifest.profile.clone(),
@@ -28,6 +28,15 @@ pub fn load_engine(bundle: &Path) -> Result<SearchEngine> {
     for (index, artifact) in manifest.lexicon.blocks.iter().enumerate() {
         engine
             .load_lexicon_block(
+                index as u32,
+                &read(bundle, artifact)?,
+                artifact.decoded_bytes,
+            )
+            .map_err(anyhow::Error::msg)?;
+    }
+    for (index, artifact) in manifest.documents.blocks.iter().enumerate() {
+        engine
+            .load_document_block(
                 index as u32,
                 &read(bundle, artifact)?,
                 artifact.decoded_bytes,

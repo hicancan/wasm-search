@@ -77,6 +77,17 @@ impl SearchEngine {
             .map_err(error)
     }
 
+    pub fn load_document_block(
+        &self,
+        block: u32,
+        bytes: Vec<u8>,
+        decoded_bytes: u32,
+    ) -> Result<(), SearchError> {
+        self.session()
+            .load_document_block(block, &bytes, decoded_bytes)
+            .map_err(error)
+    }
+
     pub fn load_postings_chunk(
         &self,
         chunk: u32,
@@ -109,6 +120,10 @@ impl SearchEngine {
 
     pub fn required_posting_chunks(&self) -> Result<String, SearchError> {
         self.session().required_posting_chunks().map_err(error)
+    }
+
+    pub fn required_document_blocks(&self) -> Result<String, SearchError> {
+        self.session().required_document_blocks().map_err(error)
     }
 
     pub fn prepare_search(&self) -> Result<String, SearchError> {

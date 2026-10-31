@@ -5,10 +5,10 @@ import { CacheStore } from './cache.js';
 import type { ArtifactRef, SearchBundleManifest } from './artifacts.js';
 
 const bytes = new Uint8Array([1, 2, 3]);
-const reference: ArtifactRef = { path: 'documents.bin', bytes: bytes.byteLength, decoded_bytes: 3 };
+const reference: ArtifactRef = { path: 'documents-index.bin', bytes: bytes.byteLength, decoded_bytes: 3 };
 const manifest: SearchBundleManifest = {
     format: 'wasm-search-bundle-v2',
-    documents: reference,
+    documents: { index: reference, blocks: [{ ...reference, path: 'documents-0000.bin' }] },
     lexicon: { index: { ...reference, path: 'lexicon-index.bin' }, blocks: [{ ...reference, path: 'lexicon-0000.bin' }] },
     postings: [{ ...reference, path: 'postings-0000.bin' }],
     content: [{ ...reference, path: 'content-0000.bin' }],
@@ -31,7 +31,7 @@ describe('ArtifactSource', () => {
         await source.bytes(reference);
 
         expect(fetchMock).toHaveBeenNthCalledWith(1, '/data/search/manifest.json', expect.anything());
-        expect(fetchMock).toHaveBeenNthCalledWith(2, '/data/search/documents.bin', expect.anything());
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/data/search/documents-index.bin', expect.anything());
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 

@@ -39,8 +39,8 @@ fn decoded_bytes(reference: &ArtifactRef) -> u32 {
 
 fn engine(bundle: &CompiledBundle) -> SearchEngine {
     SearchEngine::new(
-        bytes(bundle, &bundle.manifest.documents),
-        decoded_bytes(&bundle.manifest.documents),
+        bytes(bundle, &bundle.manifest.documents.index),
+        decoded_bytes(&bundle.manifest.documents.index),
         bytes(bundle, &bundle.manifest.lexicon.index),
         decoded_bytes(&bundle.manifest.lexicon.index),
         PROFILE.into(),
@@ -62,8 +62,8 @@ fn staged_search_matches_core_including_filters_paging_and_content_reload() {
     let manifest = &bundle.manifest;
     let android = engine(&bundle);
     let mut core = CoreSearchEngine::new(
-        &bytes(&bundle, &manifest.documents),
-        manifest.documents.decoded_bytes,
+        &bytes(&bundle, &manifest.documents.index),
+        manifest.documents.index.decoded_bytes,
         &bytes(&bundle, &manifest.lexicon.index),
         manifest.lexicon.index.decoded_bytes,
         manifest.profile.clone(),
@@ -78,6 +78,21 @@ fn staged_search_matches_core_including_filters_paging_and_content_reload() {
             )
             .unwrap();
         core.load_lexicon_block(
+            chunk as u32,
+            &bytes(&bundle, reference),
+            reference.decoded_bytes,
+        )
+        .unwrap();
+    }
+    for (chunk, reference) in manifest.documents.blocks.iter().enumerate() {
+        android
+            .load_document_block(
+                chunk as u32,
+                bytes(&bundle, reference),
+                decoded_bytes(reference),
+            )
+            .unwrap();
+        core.load_document_block(
             chunk as u32,
             &bytes(&bundle, reference),
             reference.decoded_bytes,
@@ -254,6 +269,12 @@ fn pinyin_uses_the_same_compiled_postings_through_android() {
             let reference = &bundle.manifest.postings[chunk as usize];
             android
                 .load_postings_chunk(chunk, bytes(&bundle, reference), decoded_bytes(reference))
+                .unwrap();
+        }
+        for chunk in chunks(&android.required_document_blocks().unwrap()) {
+            let reference = &bundle.manifest.documents.blocks[chunk as usize];
+            android
+                .load_document_block(chunk, bytes(&bundle, reference), decoded_bytes(reference))
                 .unwrap();
         }
         let result = value(&android.prepare_search().unwrap());

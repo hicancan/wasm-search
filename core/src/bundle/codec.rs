@@ -1,6 +1,8 @@
 use crate::document::{Attachment, DocumentKind, DocumentMeta, Posting};
+use crate::query::{FilterOption, FilterOptions};
 
-const DOCUMENT_MAGIC: &[u8; 8] = b"WSDOCS01";
+const DOCUMENT_INDEX_MAGIC: &[u8; 8] = b"WSDIDX02";
+const DOCUMENT_BLOCK_MAGIC: &[u8; 8] = b"WSDBK202";
 const LEXICON_INDEX_MAGIC: &[u8; 8] = b"WSLIDX02";
 const LEXICON_BLOCK_MAGIC: &[u8; 8] = b"WSLBK202";
 const POSTINGS_MAGIC: &[u8; 8] = b"WSPOST01";
@@ -140,73 +142,158 @@ fn decode_kind(value: u8) -> Result<DocumentKind, String> {
     }
 }
 
-pub(super) fn encode_documents(documents: &[DocumentMeta]) -> Vec<u8> {
-    let mut writer = Writer::new(DOCUMENT_MAGIC);
+fn encode_document(writer: &mut Writer, document: &DocumentMeta) {
+    writer.string(&document.id);
+    writer.string(&document.source);
+    writer.string(&document.source_name);
+    writer.string(&document.url);
+    writer.string(&document.title);
+    writer.optional_string(document.published_at.as_deref());
+    writer.optional_string(document.updated_at.as_deref());
+    writer.optional_string(document.section.as_deref());
+    writer.u8(encode_kind(document.kind));
+    writer.optional_string(document.category.as_deref());
+    writer.u32(document.content_chunk);
+    writer.u32(document.attachments.len() as u32);
+    for attachment in &document.attachments {
+        writer.string(&attachment.url);
+        writer.string(&attachment.name);
+        writer.optional_string(attachment.extension.as_deref());
+    }
+}
+
+fn decode_document(reader: &mut Reader<'_>) -> Result<DocumentMeta, String> {
+    let id = reader.string()?;
+    let source = reader.string()?;
+    let source_name = reader.string()?;
+    let url = reader.string()?;
+    let title = reader.string()?;
+    let published_at = reader.optional_string()?;
+    let updated_at = reader.optional_string()?;
+    let section = reader.optional_string()?;
+    let kind = decode_kind(reader.u8()?)?;
+    let category = reader.optional_string()?;
+    let content_chunk = reader.u32()?;
+    let attachment_count = reader.u32()? as usize;
+    let mut attachments = Vec::with_capacity(attachment_count);
+    for _ in 0..attachment_count {
+        attachments.push(Attachment {
+            url: reader.string()?,
+            name: reader.string()?,
+            extension: reader.optional_string()?,
+        });
+    }
+    Ok(DocumentMeta {
+        id,
+        source,
+        source_name,
+        url,
+        title,
+        published_at,
+        updated_at,
+        section,
+        kind,
+        category,
+        attachments,
+        content_chunk,
+    })
+}
+
+fn encode_filter_options(writer: &mut Writer, options: &FilterOptions) {
+    let encode = |writer: &mut Writer, values: &[FilterOption]| {
+        writer.u32(values.len() as u32);
+        for value in values {
+            writer.string(&value.id);
+            writer.string(&value.label);
+            writer.u32(value.count as u32);
+        }
+    };
+    encode(writer, &options.sources);
+    encode(writer, &options.categories);
+    writer.u32(options.categories_by_source.len() as u32);
+    for (source, values) in &options.categories_by_source {
+        writer.string(source);
+        encode(writer, values);
+    }
+}
+
+fn decode_filter_options(reader: &mut Reader<'_>) -> Result<FilterOptions, String> {
+    let decode = |reader: &mut Reader<'_>| -> Result<Vec<FilterOption>, String> {
+        let count = reader.u32()? as usize;
+        let mut values = Vec::with_capacity(count);
+        for _ in 0..count {
+            values.push(FilterOption {
+                id: reader.string()?,
+                label: reader.string()?,
+                count: reader.u32()? as usize,
+            });
+        }
+        Ok(values)
+    };
+    let sources = decode(reader)?;
+    let categories = decode(reader)?;
+    let source_count = reader.u32()? as usize;
+    let mut categories_by_source = std::collections::BTreeMap::new();
+    for _ in 0..source_count {
+        categories_by_source.insert(reader.string()?, decode(reader)?);
+    }
+    Ok(FilterOptions {
+        sources,
+        categories,
+        categories_by_source,
+    })
+}
+
+pub(super) fn encode_document_index(
+    document_count: u32,
+    block_starts: &[u32],
+    filter_options: &FilterOptions,
+) -> Vec<u8> {
+    let mut writer = Writer::new(DOCUMENT_INDEX_MAGIC);
+    writer.u32(document_count);
+    writer.u32(block_starts.len() as u32);
+    for start in block_starts {
+        writer.u32(*start);
+    }
+    encode_filter_options(&mut writer, filter_options);
+    writer.finish()
+}
+
+pub(crate) fn decode_document_index(
+    bytes: &[u8],
+) -> Result<(usize, Vec<u32>, FilterOptions), String> {
+    let mut reader = Reader::new(bytes, DOCUMENT_INDEX_MAGIC)?;
+    let document_count = reader.u32()? as usize;
+    let block_count = reader.u32()? as usize;
+    let mut block_starts = Vec::with_capacity(block_count);
+    for _ in 0..block_count {
+        block_starts.push(reader.u32()?);
+    }
+    let filter_options = decode_filter_options(&mut reader)?;
+    reader.finish()?;
+    Ok((document_count, block_starts, filter_options))
+}
+
+pub(super) fn encode_document_block(start: u32, documents: &[DocumentMeta]) -> Vec<u8> {
+    let mut writer = Writer::new(DOCUMENT_BLOCK_MAGIC);
+    writer.u32(start);
     writer.u32(documents.len() as u32);
     for document in documents {
-        writer.string(&document.id);
-        writer.string(&document.source);
-        writer.string(&document.source_name);
-        writer.string(&document.url);
-        writer.string(&document.title);
-        writer.optional_string(document.published_at.as_deref());
-        writer.optional_string(document.updated_at.as_deref());
-        writer.optional_string(document.section.as_deref());
-        writer.u8(encode_kind(document.kind));
-        writer.optional_string(document.category.as_deref());
-        writer.u32(document.content_chunk);
-        writer.u32(document.attachments.len() as u32);
-        for attachment in &document.attachments {
-            writer.string(&attachment.url);
-            writer.string(&attachment.name);
-            writer.optional_string(attachment.extension.as_deref());
-        }
+        encode_document(&mut writer, document);
     }
     writer.finish()
 }
 
-pub(crate) fn decode_documents(bytes: &[u8]) -> Result<Vec<DocumentMeta>, String> {
-    let mut reader = Reader::new(bytes, DOCUMENT_MAGIC)?;
+pub(crate) fn decode_document_block(bytes: &[u8]) -> Result<(u32, Vec<DocumentMeta>), String> {
+    let mut reader = Reader::new(bytes, DOCUMENT_BLOCK_MAGIC)?;
+    let start = reader.u32()?;
     let count = reader.u32()? as usize;
     let mut documents = Vec::with_capacity(count);
     for _ in 0..count {
-        let id = reader.string()?;
-        let source = reader.string()?;
-        let source_name = reader.string()?;
-        let url = reader.string()?;
-        let title = reader.string()?;
-        let published_at = reader.optional_string()?;
-        let updated_at = reader.optional_string()?;
-        let section = reader.optional_string()?;
-        let kind = decode_kind(reader.u8()?)?;
-        let category = reader.optional_string()?;
-        let content_chunk = reader.u32()?;
-        let attachment_count = reader.u32()? as usize;
-        let mut attachments = Vec::with_capacity(attachment_count);
-        for _ in 0..attachment_count {
-            attachments.push(Attachment {
-                url: reader.string()?,
-                name: reader.string()?,
-                extension: reader.optional_string()?,
-            });
-        }
-        documents.push(DocumentMeta {
-            id,
-            source,
-            source_name,
-            url,
-            title,
-            published_at,
-            updated_at,
-            section,
-            kind,
-            category,
-            attachments,
-            content_chunk,
-        });
+        documents.push(decode_document(&mut reader)?);
     }
     reader.finish()?;
-    Ok(documents)
+    Ok((start, documents))
 }
 
 pub(super) fn encode_lexicon_index(blocks: &[(String, u32)]) -> Vec<u8> {

@@ -45,6 +45,17 @@ impl SearchEngine {
             .map_err(js_error)
     }
 
+    pub fn load_document_block(
+        &mut self,
+        block: u32,
+        bytes: &[u8],
+        decoded_bytes: u32,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .load_document_block(block, bytes, decoded_bytes)
+            .map_err(js_error)
+    }
+
     pub fn load_postings_chunk(
         &mut self,
         chunk: u32,
@@ -77,6 +88,10 @@ impl SearchEngine {
 
     pub fn required_posting_chunks(&self) -> Result<String, JsValue> {
         self.inner.required_posting_chunks().map_err(js_error)
+    }
+
+    pub fn required_document_blocks(&self) -> Result<String, JsValue> {
+        self.inner.required_document_blocks().map_err(js_error)
     }
 
     pub fn prepare_search(&mut self) -> Result<String, JsValue> {

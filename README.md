@@ -59,11 +59,13 @@ const { totalCandidates, results } = await client.search(
 Bundles are immutable: serve each build from its own directory and cache it
 forever.
 
-Bundle format v2 keeps the lexicon lazy. The manifest contains a small
-`lexicon.index` artifact and fixed-size `lexicon.blocks`; the host loads only
-the blocks selected for a query, then loads the matching postings. There is no
-reader for the v1 whole-lexicon format, so clients must use the v2 manifest
-and the staged `loadLexiconBlock` / `requiredPostingChunks` protocol.
+Bundle format v2 keeps metadata lazy. The manifest contains small
+`documents.index` and `lexicon.index` artifacts plus fixed-size document and
+lexicon blocks; the host loads only the lexicon and document blocks selected for
+a query, then loads the matching postings. There is no reader for the v1
+whole-document or whole-lexicon format, so clients must use the v2 manifest and
+the staged `loadLexiconBlock` / `requiredPostingChunks` /
+`requiredDocumentBlocks` protocol.
 
 ## Pinyin
 
@@ -90,7 +92,8 @@ bindings in `android/build/kotlin`, package `top.hicancan.search`. Add these to
 your app's `jniLibs` and Kotlin sources, with JNA's Android AAR on the classpath.
 The engine uses the same bundle artifacts and JSON search protocol as wasm;
 call `beginSearch`, load its lexicon blocks, call `requiredPostingChunks`, load
-its postings, `prepareSearch`, then load
+its postings, call `requiredDocumentBlocks`, load those document blocks,
+`prepareSearch`, then load
 `requiredContentChunks` and call `hydrateSearch` for each page.
 
 ## Repository

@@ -7,8 +7,8 @@ mod query;
 mod session;
 
 pub use bundle::{
-    compile_search_bundle, ArtifactRef, CompiledArtifact, CompiledBundle, LexiconManifest,
-    SearchBundleManifest, SEARCH_BUNDLE_FORMAT,
+    compile_search_bundle, ArtifactRef, CompiledArtifact, CompiledBundle, DocumentManifest,
+    LexiconManifest, SearchBundleManifest, SEARCH_BUNDLE_FORMAT,
 };
 pub use document::{Attachment, DocumentKind, IndexDocument};
 pub use profile::{Alias, Profile};

@@ -83,8 +83,8 @@ fn artifact<'a>(bundle: &'a CompiledBundle, path: &str) -> &'a [u8] {
 
 fn engine(bundle: &CompiledBundle) -> SearchEngine {
     let mut engine = SearchEngine::new(
-        artifact(bundle, "documents.bin"),
-        bundle.manifest.documents.decoded_bytes,
+        artifact(bundle, "documents-index.bin"),
+        bundle.manifest.documents.index.decoded_bytes,
         artifact(bundle, "lexicon-index.bin"),
         bundle.manifest.lexicon.index.decoded_bytes,
         bundle.manifest.profile.clone(),
@@ -98,6 +98,15 @@ fn engine(bundle: &CompiledBundle) -> SearchEngine {
                 reference.decoded_bytes,
             )
             .expect("lexicon");
+    }
+    for (index, reference) in bundle.manifest.documents.blocks.iter().enumerate() {
+        engine
+            .load_document_block(
+                index as u32,
+                artifact(bundle, &reference.path),
+                reference.decoded_bytes,
+            )
+            .expect("documents");
     }
     for (index, reference) in bundle.manifest.postings.iter().enumerate() {
         engine
@@ -231,8 +240,8 @@ fn lazy_lexicon_preserves_top_k_order_for_fixed_queries() {
             .collect::<Vec<_>>();
 
         let mut lazy = SearchEngine::new(
-            artifact(&bundle, &bundle.manifest.documents.path),
-            bundle.manifest.documents.decoded_bytes,
+            artifact(&bundle, &bundle.manifest.documents.index.path),
+            bundle.manifest.documents.index.decoded_bytes,
             artifact(&bundle, &bundle.manifest.lexicon.index.path),
             bundle.manifest.lexicon.index.decoded_bytes,
             bundle.manifest.profile.clone(),
@@ -256,6 +265,15 @@ fn lazy_lexicon_preserves_top_k_order_for_fixed_queries() {
                 reference.decoded_bytes,
             )
             .expect("posting chunk");
+        }
+        for block in lazy.required_document_blocks(&preparation) {
+            let reference = &bundle.manifest.documents.blocks[block as usize];
+            lazy.load_document_block(
+                block,
+                artifact(&bundle, &reference.path),
+                reference.decoded_bytes,
+            )
+            .expect("document block");
         }
         let plan = lazy.plan_query(&preparation).expect("lazy plan");
         let actual = lazy

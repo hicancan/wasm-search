@@ -12,9 +12,14 @@ export interface LexiconManifest {
     blocks: ArtifactRef[];
 }
 
+export interface DocumentManifest {
+    index: ArtifactRef;
+    blocks: ArtifactRef[];
+}
+
 export interface SearchBundleManifest {
     format: 'wasm-search-bundle-v2';
-    documents: ArtifactRef;
+    documents: DocumentManifest;
     lexicon: LexiconManifest;
     postings: ArtifactRef[];
     content: ArtifactRef[];
@@ -26,7 +31,7 @@ function parseManifest(value: unknown): SearchBundleManifest {
     if (!manifest || manifest.format !== 'wasm-search-bundle-v2') {
         throw new Error('unsupported search bundle format');
     }
-    if (!manifest.documents || !manifest.lexicon?.index || !manifest.lexicon.blocks?.length || !manifest.postings?.length || !manifest.content?.length) {
+    if (!manifest.documents?.index || !manifest.documents.blocks?.length || !manifest.lexicon?.index || !manifest.lexicon.blocks?.length || !manifest.postings?.length || !manifest.content?.length) {
         throw new Error('incomplete search bundle manifest');
     }
     return manifest as SearchBundleManifest;

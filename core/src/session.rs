@@ -49,6 +49,17 @@ impl SearchSession {
             .map_err(message)
     }
 
+    pub fn load_document_block(
+        &mut self,
+        block: u32,
+        bytes: &[u8],
+        decoded_bytes: u32,
+    ) -> Result<(), String> {
+        self.inner
+            .load_document_block(block, bytes, decoded_bytes.into())
+            .map_err(message)
+    }
+
     pub fn load_postings_chunk(
         &mut self,
         chunk: u32,
@@ -100,6 +111,14 @@ impl SearchSession {
             .as_ref()
             .ok_or_else(|| message("query is not prepared"))?;
         serde_json::to_string(&self.inner.required_posting_chunks(preparation)).map_err(message)
+    }
+
+    pub fn required_document_blocks(&self) -> Result<String, String> {
+        let preparation = self
+            .preparation
+            .as_ref()
+            .ok_or_else(|| message("query is not prepared"))?;
+        serde_json::to_string(&self.inner.required_document_blocks(preparation)).map_err(message)
     }
 
     pub fn prepare_search(&mut self) -> Result<String, String> {
