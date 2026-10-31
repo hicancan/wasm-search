@@ -59,6 +59,12 @@ const { totalCandidates, results } = await client.search(
 Bundles are immutable: serve each build from its own directory and cache it
 forever.
 
+Bundle format v2 keeps the lexicon lazy. The manifest contains a small
+`lexicon.index` artifact and fixed-size `lexicon.blocks`; the host loads only
+the blocks selected for a query, then loads the matching postings. There is no
+reader for the v1 whole-lexicon format, so clients must use the v2 manifest
+and the staged `loadLexiconBlock` / `requiredPostingChunks` protocol.
+
 ## Pinyin
 
 Bundle compilation uses a generic, plain-syllable character dictionary to add
@@ -83,7 +89,8 @@ With Rust's Android targets, cargo-ndk, the Android NDK and JDK installed, run
 bindings in `android/build/kotlin`, package `top.hicancan.search`. Add these to
 your app's `jniLibs` and Kotlin sources, with JNA's Android AAR on the classpath.
 The engine uses the same bundle artifacts and JSON search protocol as wasm;
-call `beginSearch`, load its postings, `prepareSearch`, then load
+call `beginSearch`, load its lexicon blocks, call `requiredPostingChunks`, load
+its postings, `prepareSearch`, then load
 `requiredContentChunks` and call `hydrateSearch` for each page.
 
 ## Repository

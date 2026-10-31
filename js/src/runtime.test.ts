@@ -14,7 +14,9 @@ vi.mock('../wasm/wasm_search_wasm.js', () => ({
     SearchEngine: class {
         document_count() { return 2; }
         filter_options() { return JSON.stringify({ sources: [], categories: [], categoriesBySource: {} }); }
-        begin_search() { return JSON.stringify([0]); }
+    begin_search() { return JSON.stringify([0]); }
+    required_posting_chunks() { return JSON.stringify([0]); }
+    load_lexicon_block(...args: unknown[]) { engine.loadedPostings(...args); }
         load_postings_chunk(...args: unknown[]) { engine.loadedPostings(...args); }
         prepare_search() {
             return JSON.stringify({
@@ -44,9 +46,9 @@ const artifact = (path: string, decodedBytes = 4): ArtifactRef => ({
 });
 
 const manifest: SearchBundleManifest = {
-    format: 'wasm-search-bundle-v1',
+    format: 'wasm-search-bundle-v2',
     documents: artifact('documents.bin'),
-    lexicon: artifact('lexicon.bin'),
+    lexicon: { index: artifact('lexicon-index.bin'), blocks: [artifact('lexicon-0000.bin')] },
     postings: [artifact('postings-0000.bin')],
     content: [artifact('content-0000.bin')],
     profile: { aliases: [] },
@@ -106,7 +108,7 @@ describe('SearchRuntime', () => {
         const oversized = {
             ...manifest,
             documents: artifact('documents.bin', 800),
-            lexicon: artifact('lexicon.bin', 400),
+            lexicon: { index: artifact('lexicon-index.bin', 400), blocks: [artifact('lexicon-0000.bin')] },
         };
         const runtime = new SearchRuntime(source({
             manifest: vi.fn().mockResolvedValue(oversized),

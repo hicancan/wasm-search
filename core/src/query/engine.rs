@@ -5,7 +5,8 @@ use super::ranking::posting_score;
 use super::snippet::build_snippet;
 use crate::analysis::{analyze_search_query, normalize_text, QueryAnalysis};
 use crate::bundle::{
-    decode_content, decode_documents, decode_lexicon, decode_postings, decompress_artifact,
+    decode_content, decode_documents, decode_lexicon_block, decode_lexicon_index, decode_postings,
+    decompress_artifact,
 };
 use crate::document::{DocumentKind, DocumentMeta, Posting};
 use crate::profile::Profile;
@@ -18,7 +19,9 @@ pub struct SearchEngine {
     profile: Profile,
     documents: Vec<DocumentMeta>,
     normalized_titles: Vec<String>,
+    lexicon_index: Vec<(String, u32)>,
     lexicon: HashMap<String, u32>,
+    loaded_lexicon_blocks: BTreeSet<u32>,
     postings: HashMap<String, Vec<Posting>>,
     loaded_posting_chunks: BTreeSet<u32>,
     content: HashMap<u32, String>,
@@ -122,8 +125,8 @@ impl SearchEngine {
     pub fn new(
         documents: &[u8],
         document_bytes: u64,
-        lexicon: &[u8],
-        lexicon_bytes: u64,
+        lexicon_index: &[u8],
+        lexicon_index_bytes: u64,
         profile: Profile,
     ) -> Result<Self, String> {
         let documents = decode_documents(&decompress_artifact(documents, document_bytes)?)?;
@@ -135,9 +138,12 @@ impl SearchEngine {
             profile,
             documents,
             normalized_titles,
-            lexicon: decode_lexicon(&decompress_artifact(lexicon, lexicon_bytes)?)?
-                .into_iter()
-                .collect(),
+            lexicon_index: decode_lexicon_index(&decompress_artifact(
+                lexicon_index,
+                lexicon_index_bytes,
+            )?)?,
+            lexicon: HashMap::new(),
+            loaded_lexicon_blocks: BTreeSet::new(),
             postings: HashMap::new(),
             loaded_posting_chunks: BTreeSet::new(),
             content: HashMap::new(),
@@ -147,6 +153,23 @@ impl SearchEngine {
 
     pub fn document_count(&self) -> usize {
         self.documents.len()
+    }
+
+    pub fn load_lexicon_block(
+        &mut self,
+        block: u32,
+        bytes: &[u8],
+        decoded_bytes: u64,
+    ) -> Result<(), String> {
+        for (term, posting_chunk) in
+            decode_lexicon_block(&decompress_artifact(bytes, decoded_bytes)?)?
+        {
+            if self.lexicon.insert(term.clone(), posting_chunk).is_some() {
+                return Err(format!("duplicate lexicon term across blocks: {term}"));
+            }
+        }
+        self.loaded_lexicon_blocks.insert(block);
+        Ok(())
     }
 
     pub fn load_postings_chunk(
@@ -192,6 +215,30 @@ impl SearchEngine {
             request: request.clone(),
             analysis: analyze_search_query(&request.query, &self.profile),
         })
+    }
+
+    fn lexicon_block_for(&self, term: &str) -> Option<u32> {
+        let index = match self
+            .lexicon_index
+            .binary_search_by(|(first, _)| first.as_str().cmp(term))
+        {
+            Ok(index) => index,
+            Err(0) => return None,
+            Err(index) => index - 1,
+        };
+        self.lexicon_index.get(index).map(|(_, block)| *block)
+    }
+
+    pub fn required_lexicon_blocks(&self, preparation: &QueryPreparation) -> Vec<u32> {
+        preparation
+            .analysis
+            .retrieval_terms
+            .iter()
+            .filter_map(|term| self.lexicon_block_for(term))
+            .filter(|block| !self.loaded_lexicon_blocks.contains(block))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     pub fn required_posting_chunks(&self, preparation: &QueryPreparation) -> Vec<u32> {

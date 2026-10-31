@@ -16,11 +16,15 @@ it('compiles pinyin once and searches full, spaced, initial and mixed digit quer
     const manifest = JSON.parse(bundle.manifest_json());
     const files = new Map(Array.from({ length: bundle.file_count() }, (_, index) => [bundle.file_path(index), bundle.file_bytes(index)]));
     const engine = new SearchEngine(files.get(manifest.documents.path)!, manifest.documents.decoded_bytes,
-        files.get(manifest.lexicon.path)!, manifest.lexicon.decoded_bytes, '{}');
+        files.get(manifest.lexicon.index.path)!, manifest.lexicon.index.decoded_bytes, '{}');
     try {
         for (const [query, expected] of [['tushuguan', 'library'], ['tu shu guan', 'library'],
             ['tsg', 'literal'], ['JIAO3', 'teaching'], ['j3', 'teaching'], ['图书馆', 'library']]) {
-            for (const chunk of JSON.parse(engine.begin_search(JSON.stringify({ query })))) {
+            for (const block of JSON.parse(engine.begin_search(JSON.stringify({ query })))) {
+                const reference = manifest.lexicon.blocks[block];
+                engine.load_lexicon_block(block, files.get(reference.path)!, reference.decoded_bytes);
+            }
+            for (const chunk of JSON.parse(engine.required_posting_chunks())) {
                 const reference = manifest.postings[chunk];
                 engine.load_postings_chunk(chunk, files.get(reference.path)!, reference.decoded_bytes);
             }

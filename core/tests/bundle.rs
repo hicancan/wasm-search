@@ -85,11 +85,20 @@ fn engine(bundle: &CompiledBundle) -> SearchEngine {
     let mut engine = SearchEngine::new(
         artifact(bundle, "documents.bin"),
         bundle.manifest.documents.decoded_bytes,
-        artifact(bundle, "lexicon.bin"),
-        bundle.manifest.lexicon.decoded_bytes,
+        artifact(bundle, "lexicon-index.bin"),
+        bundle.manifest.lexicon.index.decoded_bytes,
         bundle.manifest.profile.clone(),
     )
     .expect("metadata");
+    for (index, reference) in bundle.manifest.lexicon.blocks.iter().enumerate() {
+        engine
+            .load_lexicon_block(
+                index as u32,
+                artifact(bundle, &reference.path),
+                reference.decoded_bytes,
+            )
+            .expect("lexicon");
+    }
     for (index, reference) in bundle.manifest.postings.iter().enumerate() {
         engine
             .load_postings_chunk(
@@ -204,6 +213,60 @@ fn compiles_and_queries_the_current_bundle_contract() {
     assert_eq!(response.total_candidates, 2);
     assert_eq!(response.results[0].id, "doc-a");
     assert_eq!(response.results[0].attachments[0].name, "申请表.pdf");
+}
+
+#[test]
+fn lazy_lexicon_preserves_top_k_order_for_fixed_queries() {
+    let bundle =
+        compile_search_bundle(categorized(documents()), Profile::default()).expect("compile");
+    let eager = engine(&bundle);
+    for query_text in ["转专业", "学校", "新闻", "不存在"] {
+        let query = request(query_text);
+        let expected = eager
+            .search(&query)
+            .expect("eager search")
+            .results
+            .into_iter()
+            .map(|result| result.id)
+            .collect::<Vec<_>>();
+
+        let mut lazy = SearchEngine::new(
+            artifact(&bundle, &bundle.manifest.documents.path),
+            bundle.manifest.documents.decoded_bytes,
+            artifact(&bundle, &bundle.manifest.lexicon.index.path),
+            bundle.manifest.lexicon.index.decoded_bytes,
+            bundle.manifest.profile.clone(),
+        )
+        .expect("lazy metadata");
+        let preparation = lazy.begin_query(&query).expect("analysis");
+        for block in lazy.required_lexicon_blocks(&preparation) {
+            let reference = &bundle.manifest.lexicon.blocks[block as usize];
+            lazy.load_lexicon_block(
+                block,
+                artifact(&bundle, &reference.path),
+                reference.decoded_bytes,
+            )
+            .expect("lexicon block");
+        }
+        for chunk in lazy.required_posting_chunks(&preparation) {
+            let reference = &bundle.manifest.postings[chunk as usize];
+            lazy.load_postings_chunk(
+                chunk,
+                artifact(&bundle, &reference.path),
+                reference.decoded_bytes,
+            )
+            .expect("posting chunk");
+        }
+        let plan = lazy.plan_query(&preparation).expect("lazy plan");
+        let actual = lazy
+            .result_shells(&plan, 0, query.limit)
+            .expect("lazy shells")
+            .results
+            .into_iter()
+            .map(|result| result.id)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "query {query_text}");
+    }
 }
 
 #[test]

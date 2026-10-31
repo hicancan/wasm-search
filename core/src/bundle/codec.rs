@@ -1,7 +1,8 @@
 use crate::document::{Attachment, DocumentKind, DocumentMeta, Posting};
 
 const DOCUMENT_MAGIC: &[u8; 8] = b"WSDOCS01";
-const LEXICON_MAGIC: &[u8; 8] = b"WSLEXI01";
+const LEXICON_INDEX_MAGIC: &[u8; 8] = b"WSLIDX02";
+const LEXICON_BLOCK_MAGIC: &[u8; 8] = b"WSLBK202";
 const POSTINGS_MAGIC: &[u8; 8] = b"WSPOST01";
 const CONTENT_MAGIC: &[u8; 8] = b"WSCONT01";
 
@@ -208,8 +209,29 @@ pub(crate) fn decode_documents(bytes: &[u8]) -> Result<Vec<DocumentMeta>, String
     Ok(documents)
 }
 
-pub(super) fn encode_lexicon(entries: &[(String, u32)]) -> Vec<u8> {
-    let mut writer = Writer::new(LEXICON_MAGIC);
+pub(super) fn encode_lexicon_index(blocks: &[(String, u32)]) -> Vec<u8> {
+    let mut writer = Writer::new(LEXICON_INDEX_MAGIC);
+    writer.u32(blocks.len() as u32);
+    for (first, block) in blocks {
+        writer.string(first);
+        writer.var_u32(*block);
+    }
+    writer.finish()
+}
+
+pub(crate) fn decode_lexicon_index(bytes: &[u8]) -> Result<Vec<(String, u32)>, String> {
+    let mut reader = Reader::new(bytes, LEXICON_INDEX_MAGIC)?;
+    let count = reader.u32()? as usize;
+    let mut blocks = Vec::with_capacity(count);
+    for _ in 0..count {
+        blocks.push((reader.string()?, reader.var_u32()?));
+    }
+    reader.finish()?;
+    Ok(blocks)
+}
+
+pub(super) fn encode_lexicon_block(entries: &[(String, u32)]) -> Vec<u8> {
+    let mut writer = Writer::new(LEXICON_BLOCK_MAGIC);
     writer.u32(entries.len() as u32);
     let mut previous = String::new();
     for (term, chunk) in entries {
@@ -228,8 +250,8 @@ pub(super) fn encode_lexicon(entries: &[(String, u32)]) -> Vec<u8> {
     writer.finish()
 }
 
-pub(crate) fn decode_lexicon(bytes: &[u8]) -> Result<Vec<(String, u32)>, String> {
-    let mut reader = Reader::new(bytes, LEXICON_MAGIC)?;
+pub(crate) fn decode_lexicon_block(bytes: &[u8]) -> Result<Vec<(String, u32)>, String> {
+    let mut reader = Reader::new(bytes, LEXICON_BLOCK_MAGIC)?;
     let count = reader.u32()? as usize;
     let mut entries = Vec::with_capacity(count);
     let mut previous = String::new();
@@ -313,15 +335,24 @@ pub(crate) fn decode_content(bytes: &[u8]) -> Result<Vec<(u32, String)>, String>
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_lexicon, encode_lexicon};
+    use super::{decode_lexicon_block, encode_lexicon_block, encode_lexicon_index};
 
     #[test]
     fn decoder_rejects_trailing_bytes() {
-        let mut bytes = encode_lexicon(&[("示例".to_string(), 0)]);
+        let mut bytes = encode_lexicon_block(&[("示例".to_string(), 0)]);
         bytes.push(0);
         assert_eq!(
-            decode_lexicon(&bytes).unwrap_err(),
+            decode_lexicon_block(&bytes).unwrap_err(),
             "trailing bytes in search artifact"
+        );
+    }
+
+    #[test]
+    fn lexicon_index_round_trips_block_boundaries() {
+        let bytes = encode_lexicon_index(&[("a".to_string(), 0), ("中".to_string(), 1)]);
+        assert_eq!(
+            super::decode_lexicon_index(&bytes).unwrap(),
+            vec![("a".to_string(), 0), ("中".to_string(), 1)]
         );
     }
 }

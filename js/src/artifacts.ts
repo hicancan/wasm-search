@@ -7,10 +7,15 @@ export interface ArtifactRef {
     decoded_bytes: number;
 }
 
+export interface LexiconManifest {
+    index: ArtifactRef;
+    blocks: ArtifactRef[];
+}
+
 export interface SearchBundleManifest {
-    format: 'wasm-search-bundle-v1';
+    format: 'wasm-search-bundle-v2';
     documents: ArtifactRef;
-    lexicon: ArtifactRef;
+    lexicon: LexiconManifest;
     postings: ArtifactRef[];
     content: ArtifactRef[];
     profile: Profile;
@@ -18,10 +23,10 @@ export interface SearchBundleManifest {
 
 function parseManifest(value: unknown): SearchBundleManifest {
     const manifest = value as Partial<SearchBundleManifest> | null;
-    if (!manifest || manifest.format !== 'wasm-search-bundle-v1') {
+    if (!manifest || manifest.format !== 'wasm-search-bundle-v2') {
         throw new Error('unsupported search bundle format');
     }
-    if (!manifest.documents || !manifest.lexicon || !manifest.postings?.length || !manifest.content?.length) {
+    if (!manifest.documents || !manifest.lexicon?.index || !manifest.lexicon.blocks?.length || !manifest.postings?.length || !manifest.content?.length) {
         throw new Error('incomplete search bundle manifest');
     }
     return manifest as SearchBundleManifest;

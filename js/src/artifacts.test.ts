@@ -7,9 +7,9 @@ import type { ArtifactRef, SearchBundleManifest } from './artifacts.js';
 const bytes = new Uint8Array([1, 2, 3]);
 const reference: ArtifactRef = { path: 'documents.bin', bytes: bytes.byteLength, decoded_bytes: 3 };
 const manifest: SearchBundleManifest = {
-    format: 'wasm-search-bundle-v1',
+    format: 'wasm-search-bundle-v2',
     documents: reference,
-    lexicon: { ...reference, path: 'lexicon.bin' },
+    lexicon: { index: { ...reference, path: 'lexicon-index.bin' }, blocks: [{ ...reference, path: 'lexicon-0000.bin' }] },
     postings: [{ ...reference, path: 'postings-0000.bin' }],
     content: [{ ...reference, path: 'content-0000.bin' }],
     profile: { aliases: [] },

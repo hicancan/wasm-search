@@ -41,8 +41,8 @@ fn engine(bundle: &CompiledBundle) -> SearchEngine {
     SearchEngine::new(
         bytes(bundle, &bundle.manifest.documents),
         decoded_bytes(&bundle.manifest.documents),
-        bytes(bundle, &bundle.manifest.lexicon),
-        decoded_bytes(&bundle.manifest.lexicon),
+        bytes(bundle, &bundle.manifest.lexicon.index),
+        decoded_bytes(&bundle.manifest.lexicon.index),
         PROFILE.into(),
     )
     .unwrap()
@@ -64,11 +64,26 @@ fn staged_search_matches_core_including_filters_paging_and_content_reload() {
     let mut core = CoreSearchEngine::new(
         &bytes(&bundle, &manifest.documents),
         manifest.documents.decoded_bytes,
-        &bytes(&bundle, &manifest.lexicon),
-        manifest.lexicon.decoded_bytes,
+        &bytes(&bundle, &manifest.lexicon.index),
+        manifest.lexicon.index.decoded_bytes,
         manifest.profile.clone(),
     )
     .unwrap();
+    for (chunk, reference) in manifest.lexicon.blocks.iter().enumerate() {
+        android
+            .load_lexicon_block(
+                chunk as u32,
+                bytes(&bundle, reference),
+                decoded_bytes(reference),
+            )
+            .unwrap();
+        core.load_lexicon_block(
+            chunk as u32,
+            &bytes(&bundle, reference),
+            reference.decoded_bytes,
+        )
+        .unwrap();
+    }
     for (chunk, reference) in manifest.postings.iter().enumerate() {
         core.load_postings_chunk(
             chunk as u32,
@@ -99,7 +114,9 @@ fn staged_search_matches_core_including_filters_paging_and_content_reload() {
         json!({"query":"转专业","filters":{"sourceId":"news","publishedFrom":"2026-07-01","publishedTo":"2026-08-31"}}),
     ];
     for (index, request) in requests.iter().enumerate() {
-        let posting_chunks = chunks(&android.begin_search(request.to_string()).unwrap());
+        let lexicon_chunks = chunks(&android.begin_search(request.to_string()).unwrap());
+        assert!(lexicon_chunks.is_empty());
+        let posting_chunks = chunks(&android.required_posting_chunks().unwrap());
         if index == 0 {
             assert!(!posting_chunks.is_empty());
         } else if index == 1 {
@@ -228,6 +245,12 @@ fn pinyin_uses_the_same_compiled_postings_through_android() {
                 .begin_search(json!({"query":query}).to_string())
                 .unwrap(),
         ) {
+            let reference = &bundle.manifest.lexicon.blocks[chunk as usize];
+            android
+                .load_lexicon_block(chunk, bytes(&bundle, reference), decoded_bytes(reference))
+                .unwrap();
+        }
+        for chunk in chunks(&android.required_posting_chunks().unwrap()) {
             let reference = &bundle.manifest.postings[chunk as usize];
             android
                 .load_postings_chunk(chunk, bytes(&bundle, reference), decoded_bytes(reference))

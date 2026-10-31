@@ -17,8 +17,8 @@ impl SearchSession {
     pub fn new(
         documents: &[u8],
         document_bytes: u32,
-        lexicon: &[u8],
-        lexicon_bytes: u32,
+        lexicon_index: &[u8],
+        lexicon_index_bytes: u32,
         profile_json: &str,
     ) -> Result<SearchSession, String> {
         let profile: Profile = serde_json::from_str(profile_json).map_err(message)?;
@@ -26,8 +26,8 @@ impl SearchSession {
             inner: SearchEngine::new(
                 documents,
                 document_bytes.into(),
-                lexicon,
-                lexicon_bytes.into(),
+                lexicon_index,
+                lexicon_index_bytes.into(),
                 profile,
             )
             .map_err(message)?,
@@ -36,6 +36,17 @@ impl SearchSession {
             plan_request: None,
             page_limit: 0,
         })
+    }
+
+    pub fn load_lexicon_block(
+        &mut self,
+        block: u32,
+        bytes: &[u8],
+        decoded_bytes: u32,
+    ) -> Result<(), String> {
+        self.inner
+            .load_lexicon_block(block, bytes, decoded_bytes.into())
+            .map_err(message)
     }
 
     pub fn load_postings_chunk(
@@ -76,11 +87,19 @@ impl SearchSession {
             return serde_json::to_string(&Vec::<u32>::new()).map_err(message);
         }
         let preparation = self.inner.begin_query(&request).map_err(message)?;
-        let chunks = self.inner.required_posting_chunks(&preparation);
+        let chunks = self.inner.required_lexicon_blocks(&preparation);
         self.preparation = Some(preparation);
         self.plan = None;
         self.plan_request = Some(request);
         serde_json::to_string(&chunks).map_err(message)
+    }
+
+    pub fn required_posting_chunks(&self) -> Result<String, String> {
+        let preparation = self
+            .preparation
+            .as_ref()
+            .ok_or_else(|| message("query is not prepared"))?;
+        serde_json::to_string(&self.inner.required_posting_chunks(preparation)).map_err(message)
     }
 
     pub fn prepare_search(&mut self) -> Result<String, String> {

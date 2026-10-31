@@ -1,4 +1,6 @@
-use super::codec::{encode_content, encode_documents, encode_lexicon, encode_postings};
+use super::codec::{
+    encode_content, encode_documents, encode_lexicon_block, encode_lexicon_index, encode_postings,
+};
 use super::compression::compress_artifact;
 use super::model::{
     ArtifactRef, CompiledArtifact, CompiledBundle, SearchBundleManifest, SEARCH_BUNDLE_FORMAT,
@@ -9,6 +11,7 @@ use crate::profile::Profile;
 use std::collections::{BTreeMap, HashMap};
 
 const POSTINGS_TARGET_CHUNK_BYTES: usize = 512 * 1024;
+const LEXICON_TARGET_BLOCK_BYTES: usize = 64 * 1024;
 const CONTENT_TARGET_CHUNK_BYTES: usize = 128 * 1024;
 const CHUNK_HEADER_BYTES: usize = 12;
 
@@ -52,6 +55,17 @@ fn posting_entry_bytes(term: &str, postings: &[Posting]) -> usize {
         previous_document = posting.document;
     }
     bytes
+}
+
+fn lexicon_entry_bytes(previous: &str, term: &str, chunk: u32) -> usize {
+    let prefix = term
+        .char_indices()
+        .zip(previous.char_indices())
+        .take_while(|((_, left), (_, right))| left == right)
+        .last()
+        .map(|((index, character), _)| index + character.len_utf8())
+        .unwrap_or(0);
+    var_u32_bytes(prefix as u32) + 4 + term.len() - prefix + var_u32_bytes(chunk)
 }
 
 fn build_contents(documents: &[IndexDocument]) -> (Vec<Vec<(u32, String)>>, Vec<u32>) {
@@ -163,10 +177,44 @@ pub fn compile_search_bundle(
         artifacts.push(artifact);
     }
     let lexicon_terms = lexicon_entries.len();
-    let lexicon_artifact =
-        compiled_artifact("lexicon.bin".to_string(), encode_lexicon(&lexicon_entries));
-    let lexicon_ref = lexicon_artifact.reference.clone();
-    artifacts.insert(1, lexicon_artifact);
+    let mut lexicon_blocks: Vec<Vec<(String, u32)>> = Vec::new();
+    let mut current_block = Vec::new();
+    let mut current_bytes = CHUNK_HEADER_BYTES;
+    let mut previous = String::new();
+    for (term, chunk) in &lexicon_entries {
+        let encoded_bytes = lexicon_entry_bytes(&previous, term, *chunk);
+        if !current_block.is_empty() && current_bytes + encoded_bytes > LEXICON_TARGET_BLOCK_BYTES {
+            lexicon_blocks.push(std::mem::take(&mut current_block));
+            current_bytes = CHUNK_HEADER_BYTES;
+            previous.clear();
+        }
+        current_block.push((term.clone(), *chunk));
+        current_bytes += lexicon_entry_bytes(&previous, term, *chunk);
+        previous.clone_from(term);
+    }
+    if !current_block.is_empty() {
+        lexicon_blocks.push(current_block);
+    }
+    let lexicon_index: Vec<_> = lexicon_blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (block[0].0.clone(), index as u32))
+        .collect();
+    let lexicon_index_artifact = compiled_artifact(
+        "lexicon-index.bin".to_string(),
+        encode_lexicon_index(&lexicon_index),
+    );
+    let lexicon_index_ref = lexicon_index_artifact.reference.clone();
+    artifacts.insert(1, lexicon_index_artifact);
+    let mut lexicon_block_refs = Vec::new();
+    for (index, entries) in lexicon_blocks.iter().enumerate() {
+        let artifact = compiled_artifact(
+            format!("lexicon-{index:04}.bin"),
+            encode_lexicon_block(entries),
+        );
+        lexicon_block_refs.push(artifact.reference.clone());
+        artifacts.push(artifact);
+    }
 
     let mut content_refs = Vec::new();
     for (chunk_index, entries) in content_chunks.iter().enumerate() {
@@ -181,7 +229,10 @@ pub fn compile_search_bundle(
     let manifest = SearchBundleManifest {
         format: SEARCH_BUNDLE_FORMAT.to_string(),
         documents: artifacts[0].reference.clone(),
-        lexicon: lexicon_ref,
+        lexicon: super::model::LexiconManifest {
+            index: lexicon_index_ref,
+            blocks: lexicon_block_refs,
+        },
         postings: posting_refs,
         content: content_refs,
         profile,

@@ -48,8 +48,8 @@ impl SearchEngine {
     pub fn new(
         documents: Vec<u8>,
         document_bytes: u32,
-        lexicon: Vec<u8>,
-        lexicon_bytes: u32,
+        lexicon_index: Vec<u8>,
+        lexicon_index_bytes: u32,
         profile_json: String,
     ) -> Result<Self, SearchError> {
         Ok(Self {
@@ -57,13 +57,24 @@ impl SearchEngine {
                 SearchSession::new(
                     &documents,
                     document_bytes,
-                    &lexicon,
-                    lexicon_bytes,
+                    &lexicon_index,
+                    lexicon_index_bytes,
                     &profile_json,
                 )
                 .map_err(error)?,
             ),
         })
+    }
+
+    pub fn load_lexicon_block(
+        &self,
+        block: u32,
+        bytes: Vec<u8>,
+        decoded_bytes: u32,
+    ) -> Result<(), SearchError> {
+        self.session()
+            .load_lexicon_block(block, &bytes, decoded_bytes)
+            .map_err(error)
     }
 
     pub fn load_postings_chunk(
@@ -94,6 +105,10 @@ impl SearchEngine {
 
     pub fn begin_search(&self, request_json: String) -> Result<String, SearchError> {
         self.session().begin_search(&request_json).map_err(error)
+    }
+
+    pub fn required_posting_chunks(&self) -> Result<String, SearchError> {
+        self.session().required_posting_chunks().map_err(error)
     }
 
     pub fn prepare_search(&self) -> Result<String, SearchError> {
