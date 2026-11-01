@@ -59,13 +59,41 @@ const { totalCandidates, results } = await client.search(
 Bundles are immutable: serve each build from its own directory and cache it
 forever.
 
+## Pinyin
+
+Bundle compilation uses a generic, plain-syllable character dictionary to add
+full pinyin and initials to the inverted index. For example, `图书馆` matches
+`tushuguan`, `tu shu guan` and `tsg`; `教3` matches `jiao3` and `j3`.
+Queries are case insensitive, and `ü` can also be entered as `v`. Literal title matches retain higher relevance
+than transliterations, and snippets never expose internal transliteration terms.
+No corpus aliases or client-side title scans are required; both WASM and Android
+consume the same compiled postings. Recompile existing bundles to enable pinyin.
+
+The table uses one default pronunciation per character, without contextual
+polyphone disambiguation. Chinese windows retain the normal index limits
+(four title characters / two body characters), plus a complete name up to 32
+characters. This bounds index growth for long prose while supporting full names.
+
+## Android
+
+With Rust's Android targets, cargo-ndk, the Android NDK and JDK installed, run
+`pwsh android/build.ps1` (toolchain paths can be set with `-NdkPath` and
+`-JdkPath`). It builds release libraries for `arm64-v8a` and `x86_64` in
+`android/build/jniLibs` (`-OutputDirectory` overrides this) and generates Kotlin
+bindings in `android/build/kotlin`, package `top.hicancan.search`. Add these to
+your app's `jniLibs` and Kotlin sources, with JNA's Android AAR on the classpath.
+The engine uses the same bundle artifacts and JSON search protocol as wasm;
+call `beginSearch`, load its postings, `prepareSearch`, then load
+`requiredContentChunks` and call `hydrateSearch` for each page.
+
 ## Repository
 
 ```text
-core/   analysis, bundle codec, ranking (the only search semantics)
-wasm/   WebAssembly bindings: SearchEngine and compile()
-cli/    wasm-search build / query
-js/     npm package: SearchClient (browser) and compileBundle (Node)
+core/    analysis, bundle codec, ranking (the only search semantics)
+wasm/    WebAssembly bindings: SearchEngine and compile()
+android/ UniFFI bindings and Android native library build
+cli/     wasm-search build / query
+js/      npm package: SearchClient (browser) and compileBundle (Node)
 ```
 
 ```sh

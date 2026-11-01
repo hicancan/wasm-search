@@ -29,6 +29,9 @@ fn term_counts(text: &str, max_n: usize) -> HashMap<String, u16> {
         let count = counts.entry(token).or_insert(0_u16);
         *count = count.saturating_add(1);
     }
+    for token in crate::pinyin::document_terms(text, max_n) {
+        counts.insert(token, 1);
+    }
     counts
 }
 

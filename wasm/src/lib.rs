@@ -1,7 +1,6 @@
 use wasm_bindgen::prelude::*;
 use wasm_search_core::{
-    compile_search_bundle, CompiledBundle, IndexDocument, Profile, Query, QueryPlan,
-    QueryPreparation, SearchEngine as CoreSearchEngine,
+    compile_search_bundle, CompiledBundle, IndexDocument, Profile, SearchSession,
 };
 
 fn js_error(error: impl ToString) -> JsValue {
@@ -10,11 +9,7 @@ fn js_error(error: impl ToString) -> JsValue {
 
 #[wasm_bindgen]
 pub struct SearchEngine {
-    inner: CoreSearchEngine,
-    preparation: Option<QueryPreparation>,
-    plan: Option<QueryPlan>,
-    plan_request: Option<Query>,
-    page_limit: usize,
+    inner: SearchSession,
 }
 
 #[wasm_bindgen]
@@ -27,20 +22,15 @@ impl SearchEngine {
         lexicon_bytes: u32,
         profile_json: &str,
     ) -> Result<SearchEngine, JsValue> {
-        let profile: Profile = serde_json::from_str(profile_json).map_err(js_error)?;
         Ok(Self {
-            inner: CoreSearchEngine::new(
+            inner: SearchSession::new(
                 documents,
-                document_bytes.into(),
+                document_bytes,
                 lexicon,
-                lexicon_bytes.into(),
-                profile,
+                lexicon_bytes,
+                profile_json,
             )
             .map_err(js_error)?,
-            preparation: None,
-            plan: None,
-            plan_request: None,
-            page_limit: 0,
         })
     }
 
@@ -51,7 +41,7 @@ impl SearchEngine {
         decoded_bytes: u32,
     ) -> Result<(), JsValue> {
         self.inner
-            .load_postings_chunk(chunk, bytes, decoded_bytes.into())
+            .load_postings_chunk(chunk, bytes, decoded_bytes)
             .map_err(js_error)
     }
 
@@ -62,7 +52,7 @@ impl SearchEngine {
         decoded_bytes: u32,
     ) -> Result<(), JsValue> {
         self.inner
-            .load_content_chunk(chunk, bytes, decoded_bytes.into())
+            .load_content_chunk(chunk, bytes, decoded_bytes)
             .map_err(js_error)
     }
 
@@ -71,80 +61,29 @@ impl SearchEngine {
     }
 
     pub fn begin_search(&mut self, request_json: &str) -> Result<String, JsValue> {
-        let request: Query = serde_json::from_str(request_json).map_err(js_error)?;
-        self.page_limit = request.limit;
-        let same_query = self.plan_request.as_ref().is_some_and(|previous| {
-            previous.query == request.query
-                && previous.sort == request.sort
-                && previous.filters == request.filters
-        });
-        if same_query && self.plan.is_some() {
-            return serde_json::to_string(&Vec::<u32>::new()).map_err(js_error);
-        }
-        let preparation = self.inner.begin_query(&request).map_err(js_error)?;
-        let chunks = self.inner.required_posting_chunks(&preparation);
-        self.preparation = Some(preparation);
-        self.plan = None;
-        self.plan_request = Some(request);
-        serde_json::to_string(&chunks).map_err(js_error)
+        self.inner.begin_search(request_json).map_err(js_error)
     }
 
     pub fn prepare_search(&mut self) -> Result<String, JsValue> {
-        if self.plan.is_none() {
-            self.plan = Some(
-                self.inner
-                    .plan_query(
-                        self.preparation
-                            .as_ref()
-                            .ok_or_else(|| js_error("query is not prepared"))?,
-                    )
-                    .map_err(js_error)?,
-            );
-        }
-        let response = self
-            .inner
-            .result_shells(
-                self.plan
-                    .as_ref()
-                    .ok_or_else(|| js_error("query is not prepared"))?,
-                0,
-                self.page_limit,
-            )
-            .map_err(js_error)?;
-        serde_json::to_string(&response).map_err(js_error)
+        self.inner.prepare_search().map_err(js_error)
     }
 
     pub fn required_content_chunks(&self, offset: u32, limit: u32) -> Result<String, JsValue> {
-        let plan = self
-            .plan
-            .as_ref()
-            .ok_or_else(|| js_error("query is not prepared"))?;
-        serde_json::to_string(&self.inner.required_content_chunks(
-            plan,
-            offset as usize,
-            limit as usize,
-        ))
-        .map_err(js_error)
+        self.inner
+            .required_content_chunks(offset, limit)
+            .map_err(js_error)
     }
 
     pub fn hydrate_search(&self, offset: u32, limit: u32) -> Result<String, JsValue> {
-        let plan = self
-            .plan
-            .as_ref()
-            .ok_or_else(|| js_error("query is not prepared"))?;
-        let response = self
-            .inner
-            .hydrate_results(plan, offset as usize, limit as usize)
-            .map_err(js_error)?;
-        serde_json::to_string(&response).map_err(js_error)
+        self.inner.hydrate_search(offset, limit).map_err(js_error)
     }
 
     pub fn filter_options(&self) -> Result<String, JsValue> {
-        serde_json::to_string(&self.inner.filter_options()).map_err(js_error)
+        self.inner.filter_options().map_err(js_error)
     }
 
     pub fn document_count(&self) -> u32 {
-        self.inner.document_count() as u32
+        self.inner.document_count()
     }
 }
 
