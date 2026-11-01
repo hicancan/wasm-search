@@ -18,20 +18,42 @@ impl SearchEngine {
     pub fn new(
         documents: &[u8],
         document_bytes: u32,
-        lexicon: &[u8],
-        lexicon_bytes: u32,
+        lexicon_index: &[u8],
+        lexicon_index_bytes: u32,
         profile_json: &str,
     ) -> Result<SearchEngine, JsValue> {
         Ok(Self {
             inner: SearchSession::new(
                 documents,
                 document_bytes,
-                lexicon,
-                lexicon_bytes,
+                lexicon_index,
+                lexicon_index_bytes,
                 profile_json,
             )
             .map_err(js_error)?,
         })
+    }
+
+    pub fn load_lexicon_block(
+        &mut self,
+        block: u32,
+        bytes: &[u8],
+        decoded_bytes: u32,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .load_lexicon_block(block, bytes, decoded_bytes)
+            .map_err(js_error)
+    }
+
+    pub fn load_document_block(
+        &mut self,
+        block: u32,
+        bytes: &[u8],
+        decoded_bytes: u32,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .load_document_block(block, bytes, decoded_bytes)
+            .map_err(js_error)
     }
 
     pub fn load_postings_chunk(
@@ -62,6 +84,14 @@ impl SearchEngine {
 
     pub fn begin_search(&mut self, request_json: &str) -> Result<String, JsValue> {
         self.inner.begin_search(request_json).map_err(js_error)
+    }
+
+    pub fn required_posting_chunks(&self) -> Result<String, JsValue> {
+        self.inner.required_posting_chunks().map_err(js_error)
+    }
+
+    pub fn required_document_blocks(&self) -> Result<String, JsValue> {
+        self.inner.required_document_blocks().map_err(js_error)
     }
 
     pub fn prepare_search(&mut self) -> Result<String, JsValue> {

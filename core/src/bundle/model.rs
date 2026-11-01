@@ -1,7 +1,7 @@
 use crate::profile::Profile;
 use serde::{Deserialize, Serialize};
 
-pub const SEARCH_BUNDLE_FORMAT: &str = "wasm-search-bundle-v1";
+pub const SEARCH_BUNDLE_FORMAT: &str = "wasm-search-bundle-v2";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -13,10 +13,24 @@ pub struct ArtifactRef {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct LexiconManifest {
+    pub index: ArtifactRef,
+    pub blocks: Vec<ArtifactRef>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DocumentManifest {
+    pub index: ArtifactRef,
+    pub blocks: Vec<ArtifactRef>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SearchBundleManifest {
     pub format: String,
-    pub documents: ArtifactRef,
-    pub lexicon: ArtifactRef,
+    pub documents: DocumentManifest,
+    pub lexicon: LexiconManifest,
     pub postings: Vec<ArtifactRef>,
     pub content: Vec<ArtifactRef>,
     pub profile: Profile,
