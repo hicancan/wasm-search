@@ -31,7 +31,7 @@ describe('ArtifactSource', () => {
         await source.bytes(reference);
 
         expect(fetchMock).toHaveBeenNthCalledWith(1, '/data/search/manifest.json', expect.anything());
-    expect(fetchMock).toHaveBeenNthCalledWith(2, '/data/search/documents-index.bin', expect.anything());
+        expect(fetchMock).toHaveBeenNthCalledWith(2, '/data/search/documents-index.bin', expect.anything());
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
@@ -41,5 +41,44 @@ describe('ArtifactSource', () => {
 
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Uint8Array([1]))));
         await expect(new ArtifactSource('/s', new CacheStore(1024)).bytes(reference)).rejects.toThrow('truncated');
+    });
+    it('bounds concurrent streams through body consumption when a query needs many blocks', async () => {
+        let active = 0, peak = 0;
+        vi.stubGlobal('fetch', vi.fn(async () => {
+            active++;
+            peak = Math.max(peak, active);
+            return new Response(new ReadableStream({ start(controller) {
+                setTimeout(() => { controller.enqueue(bytes); controller.close(); active--; }, 5);
+            } }));
+        }));
+        const source = new ArtifactSource('/s', new CacheStore(1024));
+        const result = await Promise.all(Array.from({ length: 40 }, (_, index) => source.bytes({ ...reference, path: `block-${index}.bin` })));
+        expect(result).toHaveLength(40);
+        expect(peak).toBe(4);
+        expect(active).toBe(0);
+    });
+    it('does not send queued requests after their query is canceled', async () => {
+        let finish!: () => void;
+        const pending = new Promise<void>(resolve => { finish = resolve; });
+        const fetchMock = vi.fn(async () => { await pending; return new Response(bytes); });
+        vi.stubGlobal('fetch', fetchMock);
+        const source = new ArtifactSource('/s', new CacheStore(1024));
+        const controller = new AbortController();
+        const requests = Array.from({ length: 12 }, (_, index) => source.bytes({ ...reference, path: `block-${index}.bin` }, controller.signal));
+        const settled = Promise.allSettled(requests);
+        controller.abort();
+        finish();
+        await settled;
+        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(await source.bytes({ ...reference, path: 'next.bin' })).toEqual(bytes.buffer);
+    });
+    it('retries transient transport failure but never retries invalid HTTP or truncated data', async () => {
+        const fetchMock = vi.fn().mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(new Response(bytes));
+        vi.stubGlobal('fetch', fetchMock);
+        expect(await new ArtifactSource('/s', new CacheStore(1024)).bytes(reference)).toEqual(bytes.buffer);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        fetchMock.mockReset().mockResolvedValue(new Response('', { status: 404 }));
+        await expect(new ArtifactSource('/s', new CacheStore(1024)).bytes(reference)).rejects.toThrow('404');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 });
