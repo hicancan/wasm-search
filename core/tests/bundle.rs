@@ -288,6 +288,103 @@ fn lazy_lexicon_preserves_top_k_order_for_fixed_queries() {
 }
 
 #[test]
+fn filtered_and_date_queries_load_only_candidate_document_blocks() {
+    let documents = (0..20)
+        .map(|index| {
+            let mut document = documents()[1].clone();
+            document.id = format!("doc-{index:02}");
+            document.url = format!("https://example.test/{index}");
+            document.source = if index % 2 == 0 { "office" } else { "www" }.into();
+            document.title = if [1, 8, 17].contains(&index) {
+                format!("Scholarship application {index}")
+            } else {
+                format!("Unrelated news {index}")
+            };
+            document.content = String::new();
+            document.category = Some(if index == 8 { "exam" } else { "notice" }.into());
+            document.published_at = Some(format!("2026-07-{:02}", index + 1));
+            // Exercise separate metadata blocks without adding searchable filler.
+            document.section = Some("x".repeat(9000));
+            document
+        })
+        .collect();
+    let bundle = compile_search_bundle(documents, Profile::default()).expect("compile");
+    assert!(bundle.manifest.documents.blocks.len() > 3);
+    let eager = engine(&bundle);
+    for filters in [
+        serde_json::json!({"sourceId":"office"}),
+        serde_json::json!({"excludedSourceIds":["office"]}),
+        serde_json::json!({"category":"exam"}),
+        serde_json::json!({"publishedFrom":"2026-07-10"}),
+        serde_json::json!({}),
+    ] {
+        for sort in [SortMode::Relevance, SortMode::DateDesc] {
+            // Unfiltered relevance intentionally has a separate top-k path.
+            if filters == serde_json::json!({}) && sort == SortMode::Relevance {
+                continue;
+            }
+            let query = Query {
+                query: "scholarship".into(),
+                limit: 10,
+                sort,
+                filters: serde_json::from_value(filters.clone()).expect("filters"),
+            };
+            let expected = eager.search(&query).expect("eager");
+            let mut lazy = SearchEngine::new(
+                artifact(&bundle, &bundle.manifest.documents.index.path),
+                bundle.manifest.documents.index.decoded_bytes,
+                artifact(&bundle, &bundle.manifest.lexicon.index.path),
+                bundle.manifest.lexicon.index.decoded_bytes,
+                bundle.manifest.profile.clone(),
+            )
+            .expect("metadata");
+            let preparation = lazy.begin_query(&query).expect("analysis");
+            for block in lazy.required_lexicon_blocks(&preparation) {
+                let reference = &bundle.manifest.lexicon.blocks[block as usize];
+                lazy.load_lexicon_block(
+                    block,
+                    artifact(&bundle, &reference.path),
+                    reference.decoded_bytes,
+                )
+                .expect("lexicon");
+            }
+            for chunk in lazy.required_posting_chunks(&preparation) {
+                let reference = &bundle.manifest.postings[chunk as usize];
+                lazy.load_postings_chunk(
+                    chunk,
+                    artifact(&bundle, &reference.path),
+                    reference.decoded_bytes,
+                )
+                .expect("postings");
+            }
+            let blocks = lazy.required_document_blocks(&preparation);
+            assert_eq!(blocks.len(), 3, "{query:?}");
+            for block in blocks {
+                let reference = &bundle.manifest.documents.blocks[block as usize];
+                lazy.load_document_block(
+                    block,
+                    artifact(&bundle, &reference.path),
+                    reference.decoded_bytes,
+                )
+                .expect("document");
+            }
+            assert!(lazy.required_document_blocks(&preparation).is_empty());
+            let plan = lazy.plan_query(&preparation).expect("plan");
+            let actual = lazy.result_shells(&plan, 0, query.limit).expect("results");
+            assert_eq!(
+                actual.total_candidates, expected.total_candidates,
+                "{query:?}"
+            );
+            assert_eq!(
+                actual.results.iter().map(|r| &r.id).collect::<Vec<_>>(),
+                expected.results.iter().map(|r| &r.id).collect::<Vec<_>>(),
+                "{query:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn filter_options_keep_category_counts_scoped_to_each_source() {
     let bundle =
         compile_search_bundle(categorized(documents()), Profile::default()).expect("compile");

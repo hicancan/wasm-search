@@ -77,7 +77,7 @@ export class ArtifactSource {
     /** Keep the slot until the body is consumed: HTTP/2 streams outlive response headers. */
     private async read<T>(path: string, decode: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> {
         signal?.throwIfAborted();
-        if (this.activeReads >= 4) {
+        if (this.activeReads >= 16) {
             await new Promise<void>((resolve, reject) => {
                 const resume = () => {
                     signal?.removeEventListener('abort', abort);

@@ -333,7 +333,13 @@ impl SearchEngine {
         let needs_complete_candidate_set = preparation.request.sort == SortMode::DateDesc
             || preparation.request.filters != Default::default();
         if needs_complete_candidate_set {
-            return (0..self.document_block_starts.len() as u32)
+            // Filters and date sorting need every matching candidate, but metadata
+            // for documents absent from the query postings can never affect them.
+            return scores
+                .keys()
+                .filter_map(|document| self.document_block_for(*document))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .filter(|block| !self.loaded_document_blocks.contains(block))
                 .collect();
         }

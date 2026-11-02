@@ -54,7 +54,7 @@ describe('ArtifactSource', () => {
         const source = new ArtifactSource('/s', new CacheStore(1024));
         const result = await Promise.all(Array.from({ length: 40 }, (_, index) => source.bytes({ ...reference, path: `block-${index}.bin` })));
         expect(result).toHaveLength(40);
-        expect(peak).toBe(4);
+        expect(peak).toBe(16);
         expect(active).toBe(0);
     });
     it('does not send queued requests after their query is canceled', async () => {
@@ -64,12 +64,12 @@ describe('ArtifactSource', () => {
         vi.stubGlobal('fetch', fetchMock);
         const source = new ArtifactSource('/s', new CacheStore(1024));
         const controller = new AbortController();
-        const requests = Array.from({ length: 12 }, (_, index) => source.bytes({ ...reference, path: `block-${index}.bin` }, controller.signal));
+        const requests = Array.from({ length: 40 }, (_, index) => source.bytes({ ...reference, path: `block-${index}.bin` }, controller.signal));
         const settled = Promise.allSettled(requests);
         controller.abort();
         finish();
         await settled;
-        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(fetchMock).toHaveBeenCalledTimes(16);
         expect(await source.bytes({ ...reference, path: 'next.bin' })).toEqual(bytes.buffer);
     });
     it('retries transient transport failure but never retries invalid HTTP or truncated data', async () => {
