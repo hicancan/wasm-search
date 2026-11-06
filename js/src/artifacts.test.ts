@@ -37,6 +37,16 @@ describe('ArtifactSource', () => {
         expect(new Uint8Array(await source.bytes({ ...reference, offset: 2 }))).toEqual(bytes);
     });
 
+    it('prefers a mirror and falls back to the pack when it fails', async () => {
+        const fetchMock = vi.fn(async (url: string) => {
+            if (url.endsWith('manifest.json')) return json({ ...manifest, mirrors: ['https://mirror.test/pack?sig=1'] });
+            return url.startsWith('https://mirror.test') ? new Response('', { status: 403 }) : ranged();
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        expect(await new ArtifactSource('/s', new CacheStore(1024)).bytes(reference)).toEqual(bytes.buffer);
+        expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/s/manifest.json', 'https://mirror.test/pack?sig=1', '/s/pack-000.bin']);
+    });
+
     it('rejects another format and truncated blocks', async () => {
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ ...manifest, format: 'other' })));
         await expect(new ArtifactSource('/s', new CacheStore(1024)).manifest()).rejects.toThrow('format');

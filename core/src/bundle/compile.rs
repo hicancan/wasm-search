@@ -339,6 +339,7 @@ pub fn compile_search_bundle_with(
         format: SEARCH_BUNDLE_FORMAT.to_string(),
         index: index_ref,
         packs: (0..packs.len()).map(|pack| format!("pack-{pack:03}.bin")).collect(),
+        mirrors: Vec::new(),
         profile,
     };
     Ok(CompiledBundle {

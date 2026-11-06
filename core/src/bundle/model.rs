@@ -43,6 +43,10 @@ pub struct SearchBundleManifest {
     pub format: String,
     pub index: ArtifactRef,
     pub packs: Vec<String>,
+    /// Faster addresses for the packs, by position. A host may add these after
+    /// compiling; clients fall back to `packs` when one fails or has expired.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mirrors: Vec<String>,
     pub profile: Profile,
 }
 

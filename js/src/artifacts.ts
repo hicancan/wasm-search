@@ -17,6 +17,8 @@ export interface SearchBundleManifest {
     format: 'wasm-search-bundle-v3';
     index: ArtifactRef;
     packs: string[];
+    /** Faster addresses for the packs, by position; `packs` remains the fallback. */
+    mirrors?: string[];
     profile: Profile;
 }
 
@@ -46,7 +48,7 @@ export class ArtifactSource {
     }
 
     manifest(signal?: AbortSignal): Promise<SearchBundleManifest> {
-        this.manifestRequest ??= this.read('manifest.json', async response => parseManifest(await response.json()), signal).catch(error => {
+        this.manifestRequest ??= this.read(`${this.baseUrl}/manifest.json`, async response => parseManifest(await response.json()), signal).catch(error => {
             this.manifestRequest = null;
             throw error;
         });
@@ -63,20 +65,27 @@ export class ArtifactSource {
         const request = this.manifest(signal).then(manifest => {
             const path = manifest.packs[reference.pack];
             if (!path) throw new Error(`search bundle pack does not exist: ${reference.pack}`);
-            return this.read(path, async response => {
+            const range = `bytes=${reference.offset}-${reference.offset + reference.bytes - 1}`;
+            const decode = async (response: Response) => {
                 const body = await response.arrayBuffer();
                 const bytes = response.status === 206 ? body : body.slice(reference.offset, reference.offset + reference.bytes);
                 if (bytes.byteLength !== reference.bytes) throw new Error(`truncated ${path}`);
                 this.cache.set(key, bytes);
                 return bytes;
-            }, signal, `bytes=${reference.offset}-${reference.offset + reference.bytes - 1}`);
+            };
+            const mirror = manifest.mirrors?.[reference.pack];
+            if (!mirror) return this.read(`${this.baseUrl}/${path}`, decode, signal, range);
+            return this.read(mirror, decode, signal, range).catch(error => {
+                if (signal?.aborted) throw error;
+                return this.read(`${this.baseUrl}/${path}`, decode, signal, range);
+            });
         }).finally(() => this.requests.delete(key));
         this.requests.set(key, request);
         return request;
     }
 
     /** Keep the slot until the body is consumed: HTTP/2 streams outlive response headers. */
-    private async read<T>(path: string, decode: (response: Response) => Promise<T>, signal?: AbortSignal, range?: string): Promise<T> {
+    private async read<T>(url: string, decode: (response: Response) => Promise<T>, signal?: AbortSignal, range?: string): Promise<T> {
         signal?.throwIfAborted();
         if (this.activeReads >= 16) {
             await new Promise<void>((resolve, reject) => {
@@ -98,8 +107,8 @@ export class ArtifactSource {
             for (let attempt = 0; ; attempt++) {
                 signal?.throwIfAborted();
                 try {
-                    const response = await fetch(`${this.baseUrl}/${path}`, { signal, headers: range ? { Range: range } : undefined });
-                    if (!response.ok) throw new Error(`failed to load ${path} (${response.status})`);
+                    const response = await fetch(url, { signal, headers: range ? { Range: range } : undefined });
+                    if (!response.ok) throw new Error(`failed to load ${url.split('?')[0]} (${response.status})`);
                     return await decode(response);
                 } catch (error) {
                     // fetch/body transport failures are safe to retry for immutable GETs.
