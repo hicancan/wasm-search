@@ -45,24 +45,9 @@ impl SearchEngine {
 #[uniffi::export]
 impl SearchEngine {
     #[uniffi::constructor]
-    pub fn new(
-        documents: Vec<u8>,
-        document_bytes: u32,
-        lexicon_index: Vec<u8>,
-        lexicon_index_bytes: u32,
-        profile_json: String,
-    ) -> Result<Self, SearchError> {
+    pub fn new(index: Vec<u8>, index_bytes: u32, profile_json: String) -> Result<Self, SearchError> {
         Ok(Self {
-            inner: Mutex::new(
-                SearchSession::new(
-                    &documents,
-                    document_bytes,
-                    &lexicon_index,
-                    lexicon_index_bytes,
-                    &profile_json,
-                )
-                .map_err(error)?,
-            ),
+            inner: Mutex::new(SearchSession::new(&index, index_bytes, &profile_json).map_err(error)?),
         })
     }
 
@@ -122,22 +107,20 @@ impl SearchEngine {
         self.session().required_posting_chunks().map_err(error)
     }
 
-    pub fn required_document_blocks(&self) -> Result<String, SearchError> {
-        self.session().required_document_blocks().map_err(error)
+    pub fn plan_search(&self) -> Result<String, SearchError> {
+        self.session().plan_search().map_err(error)
     }
 
-    pub fn prepare_search(&self) -> Result<String, SearchError> {
-        self.session().prepare_search().map_err(error)
+    pub fn ranked_results(&self) -> Result<String, SearchError> {
+        self.session().ranked_results().map_err(error)
     }
 
-    pub fn required_content_chunks(&self, offset: u32, limit: u32) -> Result<String, SearchError> {
-        self.session()
-            .required_content_chunks(offset, limit)
-            .map_err(error)
+    pub fn required_content_chunks(&self) -> Result<String, SearchError> {
+        self.session().required_content_chunks().map_err(error)
     }
 
-    pub fn hydrate_search(&self, offset: u32, limit: u32) -> Result<String, SearchError> {
-        self.session().hydrate_search(offset, limit).map_err(error)
+    pub fn hydrate_search(&self) -> Result<String, SearchError> {
+        self.session().hydrate_search().map_err(error)
     }
 
     pub fn filter_options(&self) -> Result<String, SearchError> {
@@ -162,27 +145,18 @@ impl Bundle {
     }
 
     pub fn file_count(&self) -> u32 {
-        self.inner.artifacts.len() as u32
+        self.inner.packs.len() as u32
     }
 
     pub fn file_path(&self, index: u32) -> Result<String, SearchError> {
-        self.inner
-            .artifacts
-            .get(index as usize)
-            .map(|artifact| artifact.reference.path.clone())
-            .ok_or_else(|| error("artifact index out of bounds"))
+        self.inner.manifest.packs.get(index as usize).cloned().ok_or_else(|| error("bundle file does not exist"))
     }
 
     pub fn file_bytes(&self, index: u32) -> Result<Vec<u8>, SearchError> {
-        self.inner
-            .artifacts
-            .get(index as usize)
-            .map(|artifact| artifact.bytes.clone())
-            .ok_or_else(|| error("artifact index out of bounds"))
+        self.inner.packs.get(index as usize).cloned().ok_or_else(|| error("bundle file does not exist"))
     }
 }
 
-/// Compile newline-delimited JSON documents into a bundle.
 #[uniffi::export]
 pub fn compile(documents_jsonl: String, profile_json: String) -> Result<Bundle, SearchError> {
     let documents = documents_jsonl

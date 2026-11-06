@@ -15,23 +15,10 @@ pub struct SearchSession {
 }
 
 impl SearchSession {
-    pub fn new(
-        documents: &[u8],
-        document_bytes: u32,
-        lexicon_index: &[u8],
-        lexicon_index_bytes: u32,
-        profile_json: &str,
-    ) -> Result<SearchSession, String> {
+    pub fn new(index: &[u8], index_bytes: u32, profile_json: &str) -> Result<SearchSession, String> {
         let profile: Profile = serde_json::from_str(profile_json).map_err(message)?;
         Ok(Self {
-            inner: SearchEngine::new(
-                documents,
-                document_bytes.into(),
-                lexicon_index,
-                lexicon_index_bytes.into(),
-                profile,
-            )
-            .map_err(message)?,
+            inner: SearchEngine::new(index, index_bytes.into(), profile).map_err(message)?,
             preparation: None,
             plan: None,
             plan_request: None,
@@ -98,7 +85,7 @@ impl SearchSession {
                 && previous.filters == request.filters
         });
         if same_query && self.plan.is_some() {
-            return serde_json::to_string(&Vec::<u32>::new()).map_err(message);
+            return Ok("[]".to_string());
         }
         let preparation = self.inner.begin_query(&request).map_err(message)?;
         let chunks = self.inner.required_lexicon_blocks(&preparation);
@@ -116,15 +103,8 @@ impl SearchSession {
         serde_json::to_string(&self.inner.required_posting_chunks(preparation)).map_err(message)
     }
 
-    pub fn required_document_blocks(&self) -> Result<String, String> {
-        let preparation = self
-            .preparation
-            .as_ref()
-            .ok_or_else(|| message("query is not prepared"))?;
-        serde_json::to_string(&self.inner.required_document_blocks(preparation)).map_err(message)
-    }
-
-    pub fn prepare_search(&mut self) -> Result<String, String> {
+    /// Ranks the query, then names the document blocks of the requested page.
+    pub fn plan_search(&mut self) -> Result<String, String> {
         if self.plan.is_none() {
             self.plan = Some(
                 self.inner
@@ -136,42 +116,27 @@ impl SearchSession {
                     .map_err(message)?,
             );
         }
-        let response = self
-            .inner
-            .result_shells(
-                self.plan
-                    .as_ref()
-                    .ok_or_else(|| message("query is not prepared"))?,
-                self.page_offset,
-                self.page_limit,
-            )
-            .map_err(message)?;
-        serde_json::to_string(&response).map_err(message)
-    }
-
-    pub fn required_content_chunks(&self, offset: u32, limit: u32) -> Result<String, String> {
-        let plan = self
-            .plan
-            .as_ref()
-            .ok_or_else(|| message("query is not prepared"))?;
-        serde_json::to_string(&self.inner.required_content_chunks(
-            plan,
-            offset as usize,
-            limit as usize,
+        serde_json::to_string(&self.inner.required_document_blocks(
+            self.plan.as_ref().expect("planned"),
+            self.page_offset,
+            self.page_limit,
         ))
         .map_err(message)
     }
 
-    pub fn hydrate_search(&self, offset: u32, limit: u32) -> Result<String, String> {
-        let plan = self
-            .plan
-            .as_ref()
-            .ok_or_else(|| message("query is not prepared"))?;
-        let response = self
-            .inner
-            .hydrate_results(plan, offset as usize, limit as usize)
-            .map_err(message)?;
-        serde_json::to_string(&response).map_err(message)
+    pub fn ranked_results(&self) -> Result<String, String> {
+        let plan = self.plan.as_ref().ok_or_else(|| message("query is not planned"))?;
+        serde_json::to_string(&self.inner.result_shells(plan, self.page_offset, self.page_limit).map_err(message)?).map_err(message)
+    }
+
+    pub fn required_content_chunks(&self) -> Result<String, String> {
+        let plan = self.plan.as_ref().ok_or_else(|| message("query is not planned"))?;
+        serde_json::to_string(&self.inner.required_content_chunks(plan, self.page_offset, self.page_limit)).map_err(message)
+    }
+
+    pub fn hydrate_search(&self) -> Result<String, String> {
+        let plan = self.plan.as_ref().ok_or_else(|| message("query is not planned"))?;
+        serde_json::to_string(&self.inner.hydrate_results(plan, self.page_offset, self.page_limit).map_err(message)?).map_err(message)
     }
 
     pub fn filter_options(&self) -> Result<String, String> {

@@ -5,8 +5,8 @@ use super::ranking::posting_score;
 use super::snippet::{build_snippet, highlight_ranges};
 use crate::analysis::{analyze_search_query, normalize_text, QueryAnalysis};
 use crate::bundle::{
-    decode_content, decode_document_block, decode_document_index, decode_lexicon_block,
-    decode_lexicon_index, decode_postings, decompress_artifact,
+    decode_content, decode_document_block, decode_index, decode_lexicon_block, decode_postings,
+    decompress_artifact, ArtifactRef, BlockRef, BlockTables, BundleIndex, RankRow,
 };
 use crate::document::{DocumentKind, DocumentMeta, Posting};
 use crate::profile::Profile;
@@ -17,12 +17,16 @@ const MAX_QUERY_LIMIT: usize = 1_000;
 
 pub struct SearchEngine {
     profile: Profile,
-    documents: Vec<DocumentMeta>,
-    normalized_titles: Vec<String>,
+    sources: Vec<String>,
+    categories: Vec<String>,
+    dates: Vec<String>,
+    rows: Vec<RankRow>,
+    tables: BlockTables,
+    documents: HashMap<u32, DocumentMeta>,
     document_block_starts: Vec<u32>,
     loaded_document_blocks: BTreeSet<u32>,
     filter_options: FilterOptions,
-    lexicon_index: Vec<(String, u32)>,
+    lexicon_firsts: Vec<String>,
     lexicon: HashMap<String, u32>,
     loaded_lexicon_blocks: BTreeSet<u32>,
     postings: HashMap<String, Vec<Posting>>,
@@ -131,40 +135,21 @@ pub struct QueryPreparation {
 }
 
 impl SearchEngine {
-    pub fn new(
-        document_index: &[u8],
-        document_index_bytes: u64,
-        lexicon_index: &[u8],
-        lexicon_index_bytes: u64,
-        profile: Profile,
-    ) -> Result<Self, String> {
-        let (document_count, document_block_starts, filter_options) =
-            decode_document_index(&decompress_artifact(document_index, document_index_bytes)?)?;
-        let empty = || DocumentMeta {
-            id: String::new(),
-            source: String::new(),
-            source_name: String::new(),
-            url: String::new(),
-            title: String::new(),
-            published_at: None,
-            updated_at: None,
-            section: None,
-            kind: DocumentKind::Page,
-            category: None,
-            attachments: Vec::new(),
-            content_chunk: 0,
-        };
+    pub fn new(index: &[u8], index_bytes: u64, profile: Profile) -> Result<Self, String> {
+        let BundleIndex { sources, categories, dates, rows, block_starts, filter_options, lexicon_firsts, tables } =
+            decode_index(&decompress_artifact(index, index_bytes)?)?;
         Ok(Self {
             profile,
-            documents: (0..document_count).map(|_| empty()).collect(),
-            normalized_titles: vec![String::new(); document_count],
-            document_block_starts,
+            sources,
+            categories,
+            dates,
+            rows,
+            tables,
+            documents: HashMap::new(),
+            document_block_starts: block_starts,
             loaded_document_blocks: BTreeSet::new(),
             filter_options,
-            lexicon_index: decode_lexicon_index(&decompress_artifact(
-                lexicon_index,
-                lexicon_index_bytes,
-            )?)?,
+            lexicon_firsts,
             lexicon: HashMap::new(),
             loaded_lexicon_blocks: BTreeSet::new(),
             postings: HashMap::new(),
@@ -175,7 +160,11 @@ impl SearchEngine {
     }
 
     pub fn document_count(&self) -> usize {
-        self.documents.len()
+        self.rows.len()
+    }
+
+    pub fn tables(&self) -> &BlockTables {
+        &self.tables
     }
 
     pub fn load_document_block(
@@ -192,16 +181,12 @@ impl SearchEngine {
         if self.document_block_starts.get(block as usize).copied() != Some(start) {
             return Err(format!("document block start does not match block {block}"));
         }
-        let start = start as usize;
-        let end = start
-            .checked_add(documents.len())
-            .ok_or_else(|| "document block range overflow".to_string())?;
-        if end > self.documents.len() {
-            return Err("document block exceeds document index".to_string());
-        }
         for (offset, document) in documents.into_iter().enumerate() {
-            self.normalized_titles[start + offset] = normalize_text(&document.title);
-            self.documents[start + offset] = document;
+            let index = start + offset as u32;
+            if index as usize >= self.rows.len() {
+                return Err("document block exceeds document index".to_string());
+            }
+            self.documents.insert(index, document);
         }
         self.loaded_document_blocks.insert(block);
         Ok(())
@@ -270,39 +255,39 @@ impl SearchEngine {
     }
 
     fn lexicon_block_for(&self, term: &str) -> Option<u32> {
-        let index = match self
-            .lexicon_index
-            .binary_search_by(|(first, _)| first.as_str().cmp(term))
-        {
-            Ok(index) => index,
-            Err(0) => return None,
-            Err(index) => index - 1,
-        };
-        self.lexicon_index.get(index).map(|(_, block)| *block)
+        match self.lexicon_firsts.binary_search_by(|first| first.as_str().cmp(term)) {
+            Ok(index) => Some(index as u32),
+            Err(0) => None,
+            Err(index) => Some(index as u32 - 1),
+        }
     }
 
-    pub fn required_lexicon_blocks(&self, preparation: &QueryPreparation) -> Vec<u32> {
-        preparation
+    fn refs(table: &[ArtifactRef], ids: impl IntoIterator<Item = u32>) -> Vec<BlockRef> {
+        ids.into_iter()
+            .filter_map(|id| table.get(id as usize).map(|artifact| BlockRef::new(id, *artifact)))
+            .collect()
+    }
+
+    pub fn required_lexicon_blocks(&self, preparation: &QueryPreparation) -> Vec<BlockRef> {
+        let ids: BTreeSet<u32> = preparation
             .analysis
             .retrieval_terms
             .iter()
             .filter_map(|term| self.lexicon_block_for(term))
             .filter(|block| !self.loaded_lexicon_blocks.contains(block))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
+            .collect();
+        Self::refs(&self.tables.lexicon, ids)
     }
 
-    pub fn required_posting_chunks(&self, preparation: &QueryPreparation) -> Vec<u32> {
-        preparation
+    pub fn required_posting_chunks(&self, preparation: &QueryPreparation) -> Vec<BlockRef> {
+        let ids: BTreeSet<u32> = preparation
             .analysis
             .retrieval_terms
             .iter()
             .filter_map(|term| self.lexicon.get(term).copied())
             .filter(|chunk| !self.loaded_posting_chunks.contains(chunk))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
+            .collect();
+        Self::refs(&self.tables.postings, ids)
     }
 
     fn document_block_for(&self, document: u32) -> Option<u32> {
@@ -317,71 +302,30 @@ impl SearchEngine {
         Some(index as u32)
     }
 
-    pub fn required_document_blocks(&self, preparation: &QueryPreparation) -> Vec<u32> {
-        let mut scores: HashMap<u32, f32> = HashMap::new();
-        for term in &preparation.analysis.retrieval_terms {
-            let Some(postings) = self.postings.get(term) else {
-                continue;
-            };
-            for posting in postings {
-                *scores.entry(posting.document).or_default() += posting_score(
-                    term,
-                    *posting,
-                    postings.len(),
-                    self.documents.len(),
-                    term == &preparation.analysis.normalized,
-                );
-            }
-        }
-        if scores.is_empty() {
-            return Vec::new();
-        }
-        let needs_complete_candidate_set = preparation.request.sort == SortMode::DateDesc
-            || preparation.request.filters != Default::default();
-        if needs_complete_candidate_set {
-            // Filters and date sorting need every matching candidate, but metadata
-            // for documents absent from the query postings can never affect them.
-            return scores
-                .keys()
-                .filter_map(|document| self.document_block_for(*document))
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .filter(|block| !self.loaded_document_blocks.contains(block))
-                .collect();
-        }
-        let candidate_limit = (preparation.request.offset + preparation.request.limit).max(10);
-        let mut candidates: Vec<_> = scores.into_iter().collect();
-        candidates.sort_by(|(left_doc, left_score), (right_doc, right_score)| {
-            right_score
-                .total_cmp(left_score)
-                .then_with(|| left_doc.cmp(right_doc))
-        });
-        candidates
-            .into_iter()
-            .take(candidate_limit)
-            .filter_map(|(document, _)| self.document_block_for(document))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .filter(|block| !self.loaded_document_blocks.contains(block))
-            .collect()
-    }
-
-    pub fn required_content_chunks(
-        &self,
-        plan: &QueryPlan,
-        offset: usize,
-        limit: usize,
-    ) -> Vec<u32> {
-        plan.ranked
+    /// The blocks describing one page of a plan. Ranking itself needs none of them.
+    pub fn required_document_blocks(&self, plan: &QueryPlan, offset: usize, limit: usize) -> Vec<BlockRef> {
+        let ids: BTreeSet<u32> = plan
+            .ranked
             .iter()
             .skip(offset)
             .take(limit)
-            .filter_map(|candidate| self.documents.get(candidate.document as usize))
+            .filter_map(|candidate| self.document_block_for(candidate.document))
+            .filter(|block| !self.loaded_document_blocks.contains(block))
+            .collect();
+        Self::refs(&self.tables.documents, ids)
+    }
+
+    pub fn required_content_chunks(&self, plan: &QueryPlan, offset: usize, limit: usize) -> Vec<BlockRef> {
+        let ids: BTreeSet<u32> = plan
+            .ranked
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .filter_map(|candidate| self.documents.get(&candidate.document))
             .map(|document| document.content_chunk)
             .filter(|chunk| !self.loaded_content_chunks.contains(chunk))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
+            .collect();
+        Self::refs(&self.tables.content, ids)
     }
 
     pub fn filter_options(&self) -> FilterOptions {
@@ -440,34 +384,27 @@ impl SearchEngine {
         Ok(())
     }
 
-    fn matches_filters(document: &DocumentMeta, request: &Query) -> bool {
+    fn matches_filters(&self, row: &RankRow, request: &Query) -> bool {
         let filters = &request.filters;
-        if !filters.source_ids.is_empty() && !filters.source_ids.contains(&document.source) {
+        let source = &self.sources[row.source as usize];
+        if !filters.source_ids.is_empty() && !filters.source_ids.contains(source) {
             return false;
         }
-        if filters.excluded_source_ids.contains(&document.source) {
+        if filters.excluded_source_ids.contains(source) {
             return false;
         }
-        if filters
-            .category
-            .as_ref()
-            .is_some_and(|category| document.category.as_ref() != Some(category))
-        {
-            return false;
+        if let Some(category) = &filters.category {
+            if row.category == 0 || &self.categories[row.category as usize - 1] != category {
+                return false;
+            }
         }
         let has_date_bounds = filters.published_from.is_some() || filters.published_to.is_some();
-        let Some(date) = document.published_at.as_deref() else {
+        if row.date == 0 {
             return !has_date_bounds || filters.include_undated;
-        };
-        if filters
-            .published_from
-            .as_deref()
-            .is_some_and(|from| date < from)
-            || filters.published_to.as_deref().is_some_and(|to| date > to)
-        {
-            return false;
         }
-        true
+        let date = self.dates[row.date as usize - 1].as_str();
+        !(filters.published_from.as_deref().is_some_and(|from| date < from)
+            || filters.published_to.as_deref().is_some_and(|to| date > to))
     }
 
     fn match_tier(
@@ -476,7 +413,7 @@ impl SearchEngine {
         state: &CandidateState,
         analysis: &QueryAnalysis,
     ) -> MatchTier {
-        let title = &self.normalized_titles[document_index];
+        let title = &self.rows[document_index].title;
         let mut tier = analysis
             .phrase_groups
             .iter()
@@ -536,7 +473,7 @@ impl SearchEngine {
             tier = tier.max(MatchTier::PinyinBody);
         }
 
-        if self.documents[document_index].kind == DocumentKind::Link
+        if self.rows[document_index].kind == DocumentKind::Link
             && tier > MatchTier::MinimumShouldMatch
         {
             tier = MatchTier::MinimumShouldMatch;
@@ -560,7 +497,7 @@ impl SearchEngine {
         }
 
         let mut states: Vec<Option<CandidateState>> = std::iter::repeat_with(|| None)
-            .take(self.documents.len())
+            .take(self.rows.len())
             .collect();
         let mut touched = Vec::new();
         for term in &analysis.retrieval_terms {
@@ -568,13 +505,7 @@ impl SearchEngine {
                 continue;
             };
             for posting in postings {
-                let block = self.document_block_for(posting.document).ok_or_else(|| {
-                    format!("posting references missing document: {}", posting.document)
-                })?;
-                if !self.loaded_document_blocks.contains(&block) {
-                    continue;
-                }
-                if self.documents.get(posting.document as usize).is_none() {
+                if self.rows.get(posting.document as usize).is_none() {
                     return Err(format!(
                         "posting references missing document: {}",
                         posting.document
@@ -590,7 +521,7 @@ impl SearchEngine {
                     term,
                     *posting,
                     postings.len(),
-                    self.documents.len(),
+                    self.rows.len(),
                     term == &analysis.normalized,
                 );
                 if posting.title_hits > 0 {
@@ -613,10 +544,10 @@ impl SearchEngine {
                     document,
                     score: state.score,
                     tier: self.match_tier(document as usize, &state, analysis),
-                    title_chars: self.normalized_titles[document as usize].chars().count(),
+                    title_chars: self.rows[document as usize].title.chars().count(),
                     source_fit: analysis
                         .preferred_sources
-                        .contains(&self.documents[document as usize].source),
+                        .contains(&self.sources[self.rows[document as usize].source as usize]),
                     matched_terms: display_terms(state.matched_terms),
                 }
             })
@@ -634,9 +565,7 @@ impl SearchEngine {
         if minimum_matches >= PARTIAL_FALLBACK_FLOOR {
             ranked.retain(|candidate| candidate.tier >= MatchTier::MinimumShouldMatch);
         }
-        ranked.retain(|candidate| {
-            Self::matches_filters(&self.documents[candidate.document as usize], request)
-        });
+        ranked.retain(|candidate| self.matches_filters(&self.rows[candidate.document as usize], request));
 
         match request.sort {
             SortMode::Relevance => ranked.sort_by(|left, right| {
@@ -647,47 +576,35 @@ impl SearchEngine {
                     .cmp(&left.tier.relevance_band(left.title_chars, query_chars))
                     .then_with(|| right.source_fit.cmp(&left.source_fit))
                     .then_with(|| {
-                        self.documents[right.document as usize]
-                            .published_at
-                            .cmp(&self.documents[left.document as usize].published_at)
+                        self.rows[right.document as usize].date.cmp(&self.rows[left.document as usize].date)
                     })
                     .then_with(|| right.tier.cmp(&left.tier))
                     .then_with(|| right.score.total_cmp(&left.score))
-                    .then_with(|| {
-                        self.documents[left.document as usize]
-                            .id
-                            .cmp(&self.documents[right.document as usize].id)
-                    })
+                    .then_with(|| left.document.cmp(&right.document))
             }),
             SortMode::DateDesc => ranked.sort_by(|left, right| {
-                self.documents[right.document as usize]
-                    .published_at
-                    .cmp(&self.documents[left.document as usize].published_at)
+                self.rows[right.document as usize].date.cmp(&self.rows[left.document as usize].date)
                     .then_with(|| right.tier.cmp(&left.tier))
                     .then_with(|| right.score.total_cmp(&left.score))
-                    .then_with(|| {
-                        self.documents[left.document as usize]
-                            .id
-                            .cmp(&self.documents[right.document as usize].id)
-                    })
+                    .then_with(|| left.document.cmp(&right.document))
             }),
         }
 
         let mut seen_urls = HashSet::new();
         let mut seen_presentations = HashSet::new();
         ranked.retain(|candidate| {
-            let document = &self.documents[candidate.document as usize];
-            if !seen_urls.insert(document.url.clone()) {
+            let row = &self.rows[candidate.document as usize];
+            if row.url_group != 0 && !seen_urls.insert(row.url_group) {
                 return false;
             }
-            let Some(date) = &document.published_at else {
+            if row.date == 0 {
                 return true;
-            };
-            let title = presentation_title_key(&document.title);
+            }
+            let title = presentation_title_key(&row.title);
             if title.chars().count() < 6 {
                 return true;
             }
-            seen_presentations.insert((date.clone(), title))
+            seen_presentations.insert((row.date, title))
         });
         Ok(QueryPlan {
             query: request.query.clone(),
@@ -702,7 +619,10 @@ impl SearchEngine {
         candidate: &RankedCandidate,
         with_snippet: bool,
     ) -> Result<SearchResult, String> {
-        let document = &self.documents[candidate.document as usize];
+        let document = self
+            .documents
+            .get(&candidate.document)
+            .ok_or_else(|| format!("required document is not loaded: {}", candidate.document))?;
         let snippet = if with_snippet {
             if !self.loaded_content_chunks.contains(&document.content_chunk) {
                 return Err(format!(

@@ -1,9 +1,9 @@
+use super::model::{ArtifactRef, BlockTables};
 use crate::document::{Attachment, DocumentKind, DocumentMeta, Posting};
 use crate::query::{FilterOption, FilterOptions};
 
-const DOCUMENT_INDEX_MAGIC: &[u8; 8] = b"WSDIDX02";
+const INDEX_MAGIC: &[u8; 8] = b"WSINDX03";
 const DOCUMENT_BLOCK_MAGIC: &[u8; 8] = b"WSDBK202";
-const LEXICON_INDEX_MAGIC: &[u8; 8] = b"WSLIDX02";
 const LEXICON_BLOCK_MAGIC: &[u8; 8] = b"WSLBK202";
 const POSTINGS_MAGIC: &[u8; 8] = b"WSPOST01";
 const CONTENT_MAGIC: &[u8; 8] = b"WSCONT01";
@@ -244,34 +244,130 @@ fn decode_filter_options(reader: &mut Reader<'_>) -> Result<FilterOptions, Strin
     })
 }
 
-pub(super) fn encode_document_index(
-    document_count: u32,
-    block_starts: &[u32],
-    filter_options: &FilterOptions,
-) -> Vec<u8> {
-    let mut writer = Writer::new(DOCUMENT_INDEX_MAGIC);
-    writer.u32(document_count);
-    writer.u32(block_starts.len() as u32);
-    for start in block_starts {
-        writer.u32(*start);
+/// What ranking needs to know about one document; everything else waits for the page.
+/// `url_group` is zero for a URL used once, otherwise shared by the documents using it.
+#[derive(Clone, Debug)]
+pub struct RankRow {
+    pub source: u32,
+    pub category: u32,
+    pub date: u32,
+    pub kind: DocumentKind,
+    pub title: String,
+    pub url_group: u32,
+}
+
+/// The one read a client makes before its first query.
+#[derive(Clone, Debug)]
+pub struct BundleIndex {
+    pub sources: Vec<String>,
+    pub categories: Vec<String>,
+    pub dates: Vec<String>,
+    pub rows: Vec<RankRow>,
+    pub block_starts: Vec<u32>,
+    pub filter_options: FilterOptions,
+    pub lexicon_firsts: Vec<String>,
+    pub tables: BlockTables,
+}
+
+fn encode_table(writer: &mut Writer, table: &[ArtifactRef]) {
+    writer.var_u32(table.len() as u32);
+    for artifact in table {
+        writer.var_u32(artifact.pack);
+        writer.var_u32(artifact.bytes as u32);
+        writer.var_u32(artifact.decoded_bytes as u32);
     }
-    encode_filter_options(&mut writer, filter_options);
+}
+
+/// Offsets are not stored: blocks lie end to end in each pack, in table order.
+fn decode_table(reader: &mut Reader<'_>, cursor: &mut (u32, u64)) -> Result<Vec<ArtifactRef>, String> {
+    let count = reader.var_u32()? as usize;
+    let mut table = Vec::with_capacity(count);
+    for _ in 0..count {
+        let pack = reader.var_u32()?;
+        if pack != cursor.0 {
+            *cursor = (pack, 0);
+        }
+        let bytes = reader.var_u32()? as u64;
+        table.push(ArtifactRef { pack, offset: cursor.1, bytes, decoded_bytes: reader.var_u32()? as u64 });
+        cursor.1 += bytes;
+    }
+    Ok(table)
+}
+
+pub(super) fn encode_index(index: &BundleIndex) -> Vec<u8> {
+    let mut writer = Writer::new(INDEX_MAGIC);
+    for list in [&index.sources, &index.categories, &index.dates] {
+        writer.var_u32(list.len() as u32);
+        for value in list {
+            writer.string(value);
+        }
+    }
+    writer.var_u32(index.rows.len() as u32);
+    for row in &index.rows {
+        writer.var_u32(row.source);
+        writer.var_u32(row.category);
+        writer.var_u32(row.date);
+        writer.u8(encode_kind(row.kind));
+        writer.string(&row.title);
+        writer.var_u32(row.url_group);
+    }
+    writer.var_u32(index.block_starts.len() as u32);
+    let mut previous = 0;
+    for start in &index.block_starts {
+        writer.var_u32(start - previous);
+        previous = *start;
+    }
+    encode_filter_options(&mut writer, &index.filter_options);
+    writer.var_u32(index.lexicon_firsts.len() as u32);
+    for first in &index.lexicon_firsts {
+        writer.string(first);
+    }
+    for table in [&index.tables.lexicon, &index.tables.postings, &index.tables.documents, &index.tables.content] {
+        encode_table(&mut writer, table);
+    }
     writer.finish()
 }
 
-pub(crate) fn decode_document_index(
-    bytes: &[u8],
-) -> Result<(usize, Vec<u32>, FilterOptions), String> {
-    let mut reader = Reader::new(bytes, DOCUMENT_INDEX_MAGIC)?;
-    let document_count = reader.u32()? as usize;
-    let block_count = reader.u32()? as usize;
-    let mut block_starts = Vec::with_capacity(block_count);
-    for _ in 0..block_count {
-        block_starts.push(reader.u32()?);
+pub(crate) fn decode_index(bytes: &[u8]) -> Result<BundleIndex, String> {
+    let mut reader = Reader::new(bytes, INDEX_MAGIC)?;
+    let mut strings = || -> Result<Vec<String>, String> {
+        let count = reader.var_u32()? as usize;
+        (0..count).map(|_| reader.string()).collect()
+    };
+    let (sources, categories, dates) = (strings()?, strings()?, strings()?);
+    let count = reader.var_u32()? as usize;
+    let mut rows = Vec::with_capacity(count);
+    for _ in 0..count {
+        let source = reader.var_u32()?;
+        let category = reader.var_u32()?;
+        let date = reader.var_u32()?;
+        let kind = decode_kind(reader.u8()?)?;
+        let title = reader.string()?;
+        let url_group = reader.var_u32()?;
+        rows.push(RankRow { source, category, date, kind, title, url_group });
+    }
+    let count = reader.var_u32()? as usize;
+    let mut block_starts = Vec::with_capacity(count);
+    let mut previous = 0;
+    for _ in 0..count {
+        previous += reader.var_u32()?;
+        block_starts.push(previous);
     }
     let filter_options = decode_filter_options(&mut reader)?;
+    let count = reader.var_u32()? as usize;
+    let mut lexicon_firsts = Vec::with_capacity(count);
+    for _ in 0..count {
+        lexicon_firsts.push(reader.string()?);
+    }
+    let mut cursor = (u32::MAX, 0);
+    let tables = BlockTables {
+        lexicon: decode_table(&mut reader, &mut cursor)?,
+        postings: decode_table(&mut reader, &mut cursor)?,
+        documents: decode_table(&mut reader, &mut cursor)?,
+        content: decode_table(&mut reader, &mut cursor)?,
+    };
     reader.finish()?;
-    Ok((document_count, block_starts, filter_options))
+    Ok(BundleIndex { sources, categories, dates, rows, block_starts, filter_options, lexicon_firsts, tables })
 }
 
 pub(super) fn encode_document_block(start: u32, documents: &[DocumentMeta]) -> Vec<u8> {
@@ -294,27 +390,6 @@ pub(crate) fn decode_document_block(bytes: &[u8]) -> Result<(u32, Vec<DocumentMe
     }
     reader.finish()?;
     Ok((start, documents))
-}
-
-pub(super) fn encode_lexicon_index(blocks: &[(String, u32)]) -> Vec<u8> {
-    let mut writer = Writer::new(LEXICON_INDEX_MAGIC);
-    writer.u32(blocks.len() as u32);
-    for (first, block) in blocks {
-        writer.string(first);
-        writer.var_u32(*block);
-    }
-    writer.finish()
-}
-
-pub(crate) fn decode_lexicon_index(bytes: &[u8]) -> Result<Vec<(String, u32)>, String> {
-    let mut reader = Reader::new(bytes, LEXICON_INDEX_MAGIC)?;
-    let count = reader.u32()? as usize;
-    let mut blocks = Vec::with_capacity(count);
-    for _ in 0..count {
-        blocks.push((reader.string()?, reader.var_u32()?));
-    }
-    reader.finish()?;
-    Ok(blocks)
 }
 
 pub(super) fn encode_lexicon_block(entries: &[(String, u32)]) -> Vec<u8> {
@@ -422,7 +497,7 @@ pub(crate) fn decode_content(bytes: &[u8]) -> Result<Vec<(u32, String)>, String>
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_lexicon_block, encode_lexicon_block, encode_lexicon_index};
+    use super::{decode_lexicon_block, encode_lexicon_block};
 
     #[test]
     fn decoder_rejects_trailing_bytes() {
@@ -431,15 +506,6 @@ mod tests {
         assert_eq!(
             decode_lexicon_block(&bytes).unwrap_err(),
             "trailing bytes in search artifact"
-        );
-    }
-
-    #[test]
-    fn lexicon_index_round_trips_block_boundaries() {
-        let bytes = encode_lexicon_index(&[("a".to_string(), 0), ("中".to_string(), 1)]);
-        assert_eq!(
-            super::decode_lexicon_index(&bytes).unwrap(),
-            vec![("a".to_string(), 0), ("中".to_string(), 1)]
         );
     }
 }

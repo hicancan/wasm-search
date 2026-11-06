@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { zstdCompressSync } from 'node:zlib';
 import { beforeAll, expect, it } from 'vitest';
 import initialize, { compile, SearchEngine } from '../wasm/wasm_search_wasm.js';
 
@@ -12,34 +13,22 @@ it('compiles pinyin once and searches full, spaced, initial and mixed digit quer
         { id: 'teaching', title: '教3' },
         { id: 'literal', title: 'tsg' },
     ].map(document => ({ ...document, source: 'places', source_name: 'Places', url: `https://example.test/${document.id}`, text: 'Generic fixture' }));
-    const bundle = compile(documents.map(document => JSON.stringify(document)).join('\n'), '{}');
+    const bundle = compile(documents.map(document => JSON.stringify(document)).join('\n'), '{}', (bytes: Uint8Array) => zstdCompressSync(bytes));
     const manifest = JSON.parse(bundle.manifest_json());
-    const files = new Map(Array.from({ length: bundle.file_count() }, (_, index) => [bundle.file_path(index), bundle.file_bytes(index)]));
-    const engine = new SearchEngine(files.get(manifest.documents.index.path)!, manifest.documents.index.decoded_bytes,
-        files.get(manifest.lexicon.index.path)!, manifest.lexicon.index.decoded_bytes, '{}');
+    const packs = Array.from({ length: bundle.file_count() }, (_, index) => bundle.file_bytes(index));
+    const read = (block: { pack: number; offset: number; bytes: number }) => packs[block.pack]!.slice(block.offset, block.offset + block.bytes);
+    const engine = new SearchEngine(read(manifest.index), manifest.index.decoded_bytes, '{}');
     try {
         for (const [query, expected] of [['tushuguan', 'library'], ['tu shu guan', 'library'],
             ['tsg', 'literal'], ['JIAO3', 'teaching'], ['j3', 'teaching'], ['图书馆', 'library']]) {
-            for (const block of JSON.parse(engine.begin_search(JSON.stringify({ query })))) {
-                const reference = manifest.lexicon.blocks[block];
-                engine.load_lexicon_block(block, files.get(reference.path)!, reference.decoded_bytes);
-            }
-            for (const chunk of JSON.parse(engine.required_posting_chunks())) {
-                const reference = manifest.postings[chunk];
-                engine.load_postings_chunk(chunk, files.get(reference.path)!, reference.decoded_bytes);
-            }
-            for (const block of JSON.parse(engine.required_document_blocks())) {
-                const reference = manifest.documents.blocks[block];
-                engine.load_document_block(block, files.get(reference.path)!, reference.decoded_bytes);
-            }
-            const shells = JSON.parse(engine.prepare_search());
+            for (const block of JSON.parse(engine.begin_search(JSON.stringify({ query })))) engine.load_lexicon_block(block.id, read(block), block.decoded_bytes);
+            for (const block of JSON.parse(engine.required_posting_chunks())) engine.load_postings_chunk(block.id, read(block), block.decoded_bytes);
+            for (const block of JSON.parse(engine.plan_search())) engine.load_document_block(block.id, read(block), block.decoded_bytes);
+            const shells = JSON.parse(engine.ranked_results());
             expect(shells.results[0].id, query).toBe(expected);
             if (query === 'tsg') expect(shells.results[1].id).toBe('library');
-            for (const chunk of JSON.parse(engine.required_content_chunks(0, 10))) {
-                const reference = manifest.content[chunk];
-                engine.load_content_chunk(chunk, files.get(reference.path)!, reference.decoded_bytes);
-            }
-            const result = engine.hydrate_search(0, 10);
+            for (const block of JSON.parse(engine.required_content_chunks())) engine.load_content_chunk(block.id, read(block), block.decoded_bytes);
+            const result = engine.hydrate_search();
             expect(JSON.parse(result).results[0].id, query).toBe(expected);
             expect(result).not.toContain('py:');
         }

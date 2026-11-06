@@ -5,9 +5,11 @@ use wasm_search_core::{
     ArtifactRef, CompiledBundle, SearchBundleManifest, SearchEngine, SEARCH_BUNDLE_FORMAT,
 };
 
-fn read(bundle: &Path, artifact: &ArtifactRef) -> Result<Vec<u8>> {
-    fs::read(bundle.join(&artifact.path))
-        .with_context(|| format!("missing bundle file {}", artifact.path))
+fn read(bundle: &Path, manifest: &SearchBundleManifest, artifact: ArtifactRef) -> Result<Vec<u8>> {
+    let pack = fs::read(bundle.join(&manifest.packs[artifact.pack as usize]))
+        .with_context(|| format!("missing pack {}", artifact.pack))?;
+    let start = artifact.offset as usize;
+    Ok(pack[start..start + artifact.bytes as usize].to_vec())
 }
 
 pub fn load_engine(bundle: &Path) -> Result<SearchEngine> {
@@ -18,48 +20,23 @@ pub fn load_engine(bundle: &Path) -> Result<SearchEngine> {
         bail!("unsupported bundle format {}", manifest.format);
     }
     let mut engine = SearchEngine::new(
-        &read(bundle, &manifest.documents.index)?,
-        manifest.documents.index.decoded_bytes,
-        &read(bundle, &manifest.lexicon.index)?,
-        manifest.lexicon.index.decoded_bytes,
+        &read(bundle, &manifest, manifest.index)?,
+        manifest.index.decoded_bytes,
         manifest.profile.clone(),
     )
     .map_err(anyhow::Error::msg)?;
-    for (index, artifact) in manifest.lexicon.blocks.iter().enumerate() {
-        engine
-            .load_lexicon_block(
-                index as u32,
-                &read(bundle, artifact)?,
-                artifact.decoded_bytes,
-            )
-            .map_err(anyhow::Error::msg)?;
+    let tables = engine.tables().clone();
+    for (index, artifact) in tables.lexicon.iter().enumerate() {
+        engine.load_lexicon_block(index as u32, &read(bundle, &manifest, *artifact)?, artifact.decoded_bytes).map_err(anyhow::Error::msg)?;
     }
-    for (index, artifact) in manifest.documents.blocks.iter().enumerate() {
-        engine
-            .load_document_block(
-                index as u32,
-                &read(bundle, artifact)?,
-                artifact.decoded_bytes,
-            )
-            .map_err(anyhow::Error::msg)?;
+    for (index, artifact) in tables.documents.iter().enumerate() {
+        engine.load_document_block(index as u32, &read(bundle, &manifest, *artifact)?, artifact.decoded_bytes).map_err(anyhow::Error::msg)?;
     }
-    for (index, artifact) in manifest.postings.iter().enumerate() {
-        engine
-            .load_postings_chunk(
-                index as u32,
-                &read(bundle, artifact)?,
-                artifact.decoded_bytes,
-            )
-            .map_err(anyhow::Error::msg)?;
+    for (index, artifact) in tables.postings.iter().enumerate() {
+        engine.load_postings_chunk(index as u32, &read(bundle, &manifest, *artifact)?, artifact.decoded_bytes).map_err(anyhow::Error::msg)?;
     }
-    for (index, artifact) in manifest.content.iter().enumerate() {
-        engine
-            .load_content_chunk(
-                index as u32,
-                &read(bundle, artifact)?,
-                artifact.decoded_bytes,
-            )
-            .map_err(anyhow::Error::msg)?;
+    for (index, artifact) in tables.content.iter().enumerate() {
+        engine.load_content_chunk(index as u32, &read(bundle, &manifest, *artifact)?, artifact.decoded_bytes).map_err(anyhow::Error::msg)?;
     }
     Ok(engine)
 }
@@ -70,8 +47,8 @@ pub fn write_bundle(output: &Path, bundle: &CompiledBundle) -> Result<()> {
         fs::remove_dir_all(output)?;
     }
     fs::create_dir_all(output)?;
-    for artifact in &bundle.artifacts {
-        fs::write(output.join(&artifact.reference.path), &artifact.bytes)?;
+    for (path, bytes) in bundle.manifest.packs.iter().zip(&bundle.packs) {
+        fs::write(output.join(path), bytes)?;
     }
     fs::write(
         output.join("manifest.json"),

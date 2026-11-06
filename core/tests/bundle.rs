@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use wasm_search_core::{
     compile_search_bundle, Attachment, CompiledBundle, DocumentKind, IndexDocument, Profile, Query,
-    SearchEngine, SortMode,
+    QueryPlan, SearchEngine, SortMode,
 };
 
 fn documents() -> Vec<IndexDocument> {
@@ -72,59 +72,48 @@ fn categorized(mut values: Vec<IndexDocument>) -> Vec<IndexDocument> {
     values
 }
 
-fn artifact<'a>(bundle: &'a CompiledBundle, path: &str) -> &'a [u8] {
-    &bundle
-        .artifacts
-        .iter()
-        .find(|artifact| artifact.reference.path == path)
-        .expect("artifact")
-        .bytes
+fn index_engine(bundle: &CompiledBundle) -> SearchEngine {
+    SearchEngine::new(
+        bundle.read(bundle.manifest.index),
+        bundle.manifest.index.decoded_bytes,
+        bundle.manifest.profile.clone(),
+    )
+    .expect("index")
+}
+
+/// Loads only what a real client would fetch for one page of a query.
+fn lazy_page(bundle: &CompiledBundle, query: &Query) -> (SearchEngine, QueryPlan) {
+    let mut lazy = index_engine(bundle);
+    let preparation = lazy.begin_query(query).expect("analysis");
+    for block in lazy.required_lexicon_blocks(&preparation) {
+        let artifact = bundle.tables.lexicon[block.id as usize];
+        lazy.load_lexicon_block(block.id, bundle.read(artifact), block.decoded_bytes).expect("lexicon");
+    }
+    for block in lazy.required_posting_chunks(&preparation) {
+        let artifact = bundle.tables.postings[block.id as usize];
+        lazy.load_postings_chunk(block.id, bundle.read(artifact), block.decoded_bytes).expect("postings");
+    }
+    let plan = lazy.plan_query(&preparation).expect("plan");
+    for block in lazy.required_document_blocks(&plan, query.offset, query.limit) {
+        let artifact = bundle.tables.documents[block.id as usize];
+        lazy.load_document_block(block.id, bundle.read(artifact), block.decoded_bytes).expect("document");
+    }
+    (lazy, plan)
 }
 
 fn engine(bundle: &CompiledBundle) -> SearchEngine {
-    let mut engine = SearchEngine::new(
-        artifact(bundle, "documents-index.bin"),
-        bundle.manifest.documents.index.decoded_bytes,
-        artifact(bundle, "lexicon-index.bin"),
-        bundle.manifest.lexicon.index.decoded_bytes,
-        bundle.manifest.profile.clone(),
-    )
-    .expect("metadata");
-    for (index, reference) in bundle.manifest.lexicon.blocks.iter().enumerate() {
-        engine
-            .load_lexicon_block(
-                index as u32,
-                artifact(bundle, &reference.path),
-                reference.decoded_bytes,
-            )
-            .expect("lexicon");
+    let mut engine = index_engine(bundle);
+    for (index, reference) in bundle.tables.lexicon.iter().enumerate() {
+        engine.load_lexicon_block(index as u32, bundle.read(*reference), reference.decoded_bytes).expect("lexicon");
     }
-    for (index, reference) in bundle.manifest.documents.blocks.iter().enumerate() {
-        engine
-            .load_document_block(
-                index as u32,
-                artifact(bundle, &reference.path),
-                reference.decoded_bytes,
-            )
-            .expect("documents");
+    for (index, reference) in bundle.tables.documents.iter().enumerate() {
+        engine.load_document_block(index as u32, bundle.read(*reference), reference.decoded_bytes).expect("documents");
     }
-    for (index, reference) in bundle.manifest.postings.iter().enumerate() {
-        engine
-            .load_postings_chunk(
-                index as u32,
-                artifact(bundle, &reference.path),
-                reference.decoded_bytes,
-            )
-            .expect("postings");
+    for (index, reference) in bundle.tables.postings.iter().enumerate() {
+        engine.load_postings_chunk(index as u32, bundle.read(*reference), reference.decoded_bytes).expect("postings");
     }
-    for (index, reference) in bundle.manifest.content.iter().enumerate() {
-        engine
-            .load_content_chunk(
-                index as u32,
-                artifact(bundle, &reference.path),
-                reference.decoded_bytes,
-            )
-            .expect("content");
+    for (index, reference) in bundle.tables.content.iter().enumerate() {
+        engine.load_content_chunk(index as u32, bundle.read(*reference), reference.decoded_bytes).expect("content");
     }
     engine
 }
@@ -241,43 +230,7 @@ fn lazy_lexicon_preserves_top_k_order_for_fixed_queries() {
             .map(|result| result.id)
             .collect::<Vec<_>>();
 
-        let mut lazy = SearchEngine::new(
-            artifact(&bundle, &bundle.manifest.documents.index.path),
-            bundle.manifest.documents.index.decoded_bytes,
-            artifact(&bundle, &bundle.manifest.lexicon.index.path),
-            bundle.manifest.lexicon.index.decoded_bytes,
-            bundle.manifest.profile.clone(),
-        )
-        .expect("lazy metadata");
-        let preparation = lazy.begin_query(&query).expect("analysis");
-        for block in lazy.required_lexicon_blocks(&preparation) {
-            let reference = &bundle.manifest.lexicon.blocks[block as usize];
-            lazy.load_lexicon_block(
-                block,
-                artifact(&bundle, &reference.path),
-                reference.decoded_bytes,
-            )
-            .expect("lexicon block");
-        }
-        for chunk in lazy.required_posting_chunks(&preparation) {
-            let reference = &bundle.manifest.postings[chunk as usize];
-            lazy.load_postings_chunk(
-                chunk,
-                artifact(&bundle, &reference.path),
-                reference.decoded_bytes,
-            )
-            .expect("posting chunk");
-        }
-        for block in lazy.required_document_blocks(&preparation) {
-            let reference = &bundle.manifest.documents.blocks[block as usize];
-            lazy.load_document_block(
-                block,
-                artifact(&bundle, &reference.path),
-                reference.decoded_bytes,
-            )
-            .expect("document block");
-        }
-        let plan = lazy.plan_query(&preparation).expect("lazy plan");
+        let (lazy, plan) = lazy_page(&bundle, &query);
         let actual = lazy
             .result_shells(&plan, 0, query.limit)
             .expect("lazy shells")
@@ -290,7 +243,7 @@ fn lazy_lexicon_preserves_top_k_order_for_fixed_queries() {
 }
 
 #[test]
-fn filtered_and_date_queries_load_only_candidate_document_blocks() {
+fn filtered_and_date_queries_match_with_only_page_document_blocks() {
     let documents = (0..20)
         .map(|index| {
             let mut document = documents()[1].clone();
@@ -311,7 +264,7 @@ fn filtered_and_date_queries_load_only_candidate_document_blocks() {
         })
         .collect();
     let bundle = compile_search_bundle(documents, Profile::default()).expect("compile");
-    assert!(bundle.manifest.documents.blocks.len() > 3);
+    assert!(bundle.tables.documents.len() > 3);
     let eager = engine(&bundle);
     for filters in [
         serde_json::json!({"sourceIds":["office"]}),
@@ -333,46 +286,7 @@ fn filtered_and_date_queries_load_only_candidate_document_blocks() {
                 filters: serde_json::from_value(filters.clone()).expect("filters"),
             };
             let expected = eager.search(&query).expect("eager");
-            let mut lazy = SearchEngine::new(
-                artifact(&bundle, &bundle.manifest.documents.index.path),
-                bundle.manifest.documents.index.decoded_bytes,
-                artifact(&bundle, &bundle.manifest.lexicon.index.path),
-                bundle.manifest.lexicon.index.decoded_bytes,
-                bundle.manifest.profile.clone(),
-            )
-            .expect("metadata");
-            let preparation = lazy.begin_query(&query).expect("analysis");
-            for block in lazy.required_lexicon_blocks(&preparation) {
-                let reference = &bundle.manifest.lexicon.blocks[block as usize];
-                lazy.load_lexicon_block(
-                    block,
-                    artifact(&bundle, &reference.path),
-                    reference.decoded_bytes,
-                )
-                .expect("lexicon");
-            }
-            for chunk in lazy.required_posting_chunks(&preparation) {
-                let reference = &bundle.manifest.postings[chunk as usize];
-                lazy.load_postings_chunk(
-                    chunk,
-                    artifact(&bundle, &reference.path),
-                    reference.decoded_bytes,
-                )
-                .expect("postings");
-            }
-            let blocks = lazy.required_document_blocks(&preparation);
-            assert_eq!(blocks.len(), 3, "{query:?}");
-            for block in blocks {
-                let reference = &bundle.manifest.documents.blocks[block as usize];
-                lazy.load_document_block(
-                    block,
-                    artifact(&bundle, &reference.path),
-                    reference.decoded_bytes,
-                )
-                .expect("document");
-            }
-            assert!(lazy.required_document_blocks(&preparation).is_empty());
-            let plan = lazy.plan_query(&preparation).expect("plan");
+            let (lazy, plan) = lazy_page(&bundle, &query);
             let actual = lazy.result_shells(&plan, 0, query.limit).expect("results");
             assert_eq!(
                 actual.total_candidates, expected.total_candidates,
@@ -437,14 +351,8 @@ fn one_query_plan_keeps_exact_order_while_snippets_are_hydrated() {
     engine.clear_content();
     let chunks = engine.required_content_chunks(&plan, 0, 10);
     for chunk in chunks {
-        let reference = &bundle.manifest.content[chunk as usize];
-        engine
-            .load_content_chunk(
-                chunk,
-                artifact(&bundle, &reference.path),
-                reference.decoded_bytes,
-            )
-            .expect("content");
+        let artifact = bundle.tables.content[chunk.id as usize];
+        engine.load_content_chunk(chunk.id, bundle.read(artifact), chunk.decoded_bytes).expect("content");
     }
     let hydrated = engine.hydrate_results(&plan, 0, 10).expect("hydrated");
     assert_eq!(

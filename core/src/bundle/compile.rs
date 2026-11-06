@@ -1,33 +1,21 @@
 use super::codec::{
-    encode_content, encode_document_block, encode_document_index, encode_lexicon_block,
-    encode_lexicon_index, encode_postings,
+    encode_content, encode_document_block, encode_index, encode_lexicon_block, encode_postings,
+    BundleIndex, RankRow,
 };
 use super::compression::compress_artifact;
-use super::model::{
-    ArtifactRef, CompiledArtifact, CompiledBundle, SearchBundleManifest, SEARCH_BUNDLE_FORMAT,
-};
-use crate::analysis::analyze_document;
+use super::model::{ArtifactRef, BlockTables, CompiledBundle, SearchBundleManifest, SEARCH_BUNDLE_FORMAT};
+use crate::analysis::{analyze_document, normalize_text};
 use crate::document::{DocumentMeta, IndexDocument, Posting};
 use crate::profile::Profile;
 use crate::query::{FilterOption, FilterOptions};
 use std::collections::{BTreeMap, HashMap};
 
-const POSTINGS_TARGET_CHUNK_BYTES: usize = 128 * 1024;
-const LEXICON_TARGET_BLOCK_BYTES: usize = 128 * 1024;
+const POSTINGS_TARGET_CHUNK_BYTES: usize = 32 * 1024;
+const LEXICON_TARGET_BLOCK_BYTES: usize = 32 * 1024;
 const DOCUMENT_TARGET_BLOCK_BYTES: usize = 16 * 1024;
-const CONTENT_TARGET_CHUNK_BYTES: usize = 128 * 1024;
+const CONTENT_TARGET_CHUNK_BYTES: usize = 32 * 1024;
+const PACK_TARGET_BYTES: usize = 16 * 1024 * 1024;
 const CHUNK_HEADER_BYTES: usize = 12;
-
-fn compiled_artifact(path: String, decoded: Vec<u8>) -> CompiledArtifact {
-    let decoded_bytes = decoded.len() as u64;
-    let bytes = compress_artifact(&decoded);
-    let reference = ArtifactRef {
-        path,
-        bytes: bytes.len() as u64,
-        decoded_bytes,
-    };
-    CompiledArtifact { reference, bytes }
-}
 
 fn term_counts(text: &str, max_n: usize) -> HashMap<String, u16> {
     let mut counts = HashMap::new();
@@ -155,9 +143,21 @@ pub fn compile_search_bundle(
     documents: Vec<IndexDocument>,
     profile: Profile,
 ) -> Result<CompiledBundle, String> {
+    compile_search_bundle_with(documents, profile, &mut compress_artifact)
+}
+
+/// Compiles with the caller's compressor; any zstd frame decodes. A host with a slower,
+/// tighter encoder than this crate's own can pay once here to save on every fetch.
+pub fn compile_search_bundle_with(
+    mut documents: Vec<IndexDocument>,
+    profile: Profile,
+    compress: &mut dyn FnMut(&[u8]) -> Vec<u8>,
+) -> Result<CompiledBundle, String> {
     if documents.is_empty() {
         return Err("cannot build a search bundle from no documents".to_string());
     }
+    // Document numbers follow ids, so the last ranking tie-break needs no stored id.
+    documents.sort_by(|left, right| left.id.cmp(&right.id));
 
     let (content_chunks, content_assignments) = build_contents(&documents);
     let metas: Vec<DocumentMeta> = documents
@@ -242,23 +242,13 @@ pub fn compile_search_bundle(
         document_block_starts.push((metas.len() - current_block.len()) as u32);
         document_blocks.push(current_block);
     }
-    let document_index_artifact = compiled_artifact(
-        "documents-index.bin".to_string(),
-        encode_document_index(metas.len() as u32, &document_block_starts, &filter_options),
-    );
-    let mut artifacts = vec![document_index_artifact];
     let mut lexicon_entries = Vec::new();
-    let mut posting_refs = Vec::new();
+    let mut encoded_postings = Vec::with_capacity(postings_chunks.len());
     for (chunk_index, entries) in postings_chunks.iter().enumerate() {
         for (term, _) in entries {
             lexicon_entries.push((term.clone(), chunk_index as u32));
         }
-        let artifact = compiled_artifact(
-            format!("postings-{chunk_index:04}.bin"),
-            encode_postings(entries),
-        );
-        posting_refs.push(artifact.reference.clone());
-        artifacts.push(artifact);
+        encoded_postings.push(encode_postings(entries));
     }
     let lexicon_terms = lexicon_entries.len();
     let mut lexicon_blocks: Vec<Vec<(String, u32)>> = Vec::new();
@@ -279,65 +269,82 @@ pub fn compile_search_bundle(
     if !current_block.is_empty() {
         lexicon_blocks.push(current_block);
     }
-    let lexicon_index: Vec<_> = lexicon_blocks
-        .iter()
+
+    // Pack zero holds the index alone; blocks follow, grouped by kind.
+    let mut packs: Vec<Vec<u8>> = vec![Vec::new()];
+    let mut place = |decoded: Vec<u8>| {
+        let compressed = compress(&decoded);
+        let pack = packs.last().expect("a pack");
+        if packs.len() == 1 || pack.len() + compressed.len() > PACK_TARGET_BYTES {
+            packs.push(Vec::new());
+        }
+        let index = packs.len() - 1;
+        let offset = packs[index].len() as u64;
+        packs[index].extend_from_slice(&compressed);
+        ArtifactRef { pack: index as u32, offset, bytes: compressed.len() as u64, decoded_bytes: decoded.len() as u64 }
+    };
+    let tables = BlockTables {
+        lexicon: lexicon_blocks.iter().map(|entries| place(encode_lexicon_block(entries))).collect(),
+        postings: encoded_postings.into_iter().map(&mut place).collect(),
+        documents: document_blocks.iter().enumerate().map(|(index, entries)| place(encode_document_block(document_block_starts[index], entries))).collect(),
+        content: content_chunks.iter().map(|entries| place(encode_content(entries))).collect(),
+    };
+
+    let mut sources: Vec<String> = metas.iter().map(|document| document.source.clone()).collect();
+    let mut categories: Vec<String> = metas.iter().filter_map(|document| document.category.clone()).collect();
+    let mut dates: Vec<String> = metas.iter().filter_map(|document| document.published_at.clone()).collect();
+    for list in [&mut sources, &mut categories, &mut dates] {
+        list.sort();
+        list.dedup();
+    }
+    let mut url_uses: HashMap<&str, u32> = HashMap::new();
+    for document in &metas {
+        *url_uses.entry(document.url.as_str()).or_default() += 1;
+    }
+    let url_groups: HashMap<&str, u32> = url_uses
+        .into_iter()
+        .filter(|(_, uses)| *uses > 1)
         .enumerate()
-        .map(|(index, block)| (block[0].0.clone(), index as u32))
+        .map(|(group, (url, _))| (url, group as u32 + 1))
         .collect();
-    let lexicon_index_artifact = compiled_artifact(
-        "lexicon-index.bin".to_string(),
-        encode_lexicon_index(&lexicon_index),
-    );
-    let lexicon_index_ref = lexicon_index_artifact.reference.clone();
-    artifacts.insert(1, lexicon_index_artifact);
-    let mut lexicon_block_refs = Vec::new();
-    for (index, entries) in lexicon_blocks.iter().enumerate() {
-        let artifact = compiled_artifact(
-            format!("lexicon-{index:04}.bin"),
-            encode_lexicon_block(entries),
-        );
-        lexicon_block_refs.push(artifact.reference.clone());
-        artifacts.push(artifact);
-    }
-
-    let mut content_refs = Vec::new();
-    for (chunk_index, entries) in content_chunks.iter().enumerate() {
-        let artifact = compiled_artifact(
-            format!("content-{chunk_index:04}.bin"),
-            encode_content(entries),
-        );
-        content_refs.push(artifact.reference.clone());
-        artifacts.push(artifact);
-    }
-
-    let mut document_block_refs = Vec::new();
-    for (index, entries) in document_blocks.iter().enumerate() {
-        let start = document_block_starts[index];
-        let artifact = compiled_artifact(
-            format!("documents-{index:04}.bin"),
-            encode_document_block(start, entries),
-        );
-        document_block_refs.push(artifact.reference.clone());
-        artifacts.push(artifact);
-    }
+    // A category or date of zero means none, so dates compare as they sort.
+    let position = |list: &[String], value: &str| list.binary_search_by(|item| item.as_str().cmp(value)).expect("listed") as u32;
+    let rows = metas
+        .iter()
+        .map(|document| RankRow {
+            source: position(&sources, &document.source),
+            category: document.category.as_deref().map_or(0, |value| position(&categories, value) + 1),
+            date: document.published_at.as_deref().map_or(0, |value| position(&dates, value) + 1),
+            kind: document.kind,
+            title: normalize_text(&document.title),
+            url_group: url_groups.get(document.url.as_str()).copied().unwrap_or(0),
+        })
+        .collect();
+    let index = BundleIndex {
+        sources,
+        categories,
+        dates,
+        rows,
+        block_starts: document_block_starts,
+        filter_options,
+        lexicon_firsts: lexicon_blocks.iter().map(|block| block[0].0.clone()).collect(),
+        tables: tables.clone(),
+    };
+    let encoded = encode_index(&index);
+    let compressed = compress(&encoded);
+    let index_ref = ArtifactRef { pack: 0, offset: 0, bytes: compressed.len() as u64, decoded_bytes: encoded.len() as u64 };
+    packs[0] = compressed;
 
     let manifest = SearchBundleManifest {
         format: SEARCH_BUNDLE_FORMAT.to_string(),
-        documents: super::model::DocumentManifest {
-            index: artifacts[0].reference.clone(),
-            blocks: document_block_refs,
-        },
-        lexicon: super::model::LexiconManifest {
-            index: lexicon_index_ref,
-            blocks: lexicon_block_refs,
-        },
-        postings: posting_refs,
-        content: content_refs,
+        index: index_ref,
+        packs: (0..packs.len()).map(|pack| format!("pack-{pack:03}.bin")).collect(),
         profile,
     };
     Ok(CompiledBundle {
         manifest,
-        artifacts,
+        packs,
+        tables,
         document_count: metas.len() as u32,
         lexicon_terms,
     })

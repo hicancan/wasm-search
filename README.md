@@ -3,7 +3,7 @@
 Full-text search that runs entirely in the browser. A Rust engine — CJK-aware
 analysis, an inverted index, tiered ranking and snippets — compiled to
 WebAssembly. Bundles are built in Node (or with the CLI) from a JSON-lines file
-and served as static files; the browser downloads only the chunks a query needs.
+and served as static files; the browser downloads only the byte ranges a query needs.
 
 **Production Deployment & Live Demo:** [https://studev.hicancan.top/search/](https://studev.hicancan.top/search/)
 
@@ -66,13 +66,15 @@ without analysing text itself.
 Bundles are immutable: serve each build from its own directory and cache it
 forever.
 
-Bundle format v2 keeps metadata lazy. The manifest contains small
-`documents.index` and `lexicon.index` artifacts plus fixed-size document and
-lexicon blocks; the host loads only the lexicon and document blocks selected for
-a query, then loads the matching postings. There is no reader for the v1
-whole-document or whole-lexicon format, so clients must use the v2 manifest and
-the staged `loadLexiconBlock` / `requiredPostingChunks` /
-`requiredDocumentBlocks` protocol.
+Bundle format v3 has one index and a few pack files. The index is the only read a
+client makes before its first query: it holds what ranking needs for every document
+(normalized title, source, category, date, kind) and where every block lies in the
+packs. A query then fetches, by byte range, the lexicon and postings blocks of its
+terms and the document and content blocks of the page it shows. A server that ignores
+range requests still works, at the cost of whole packs. Hosts drive this through the
+engine: `beginSearch`, `requiredPostingChunks`, `planSearch`, `rankedResults`,
+`requiredContentChunks`, `hydrateSearch`, each of the `required` and `begin` and `plan`
+calls naming the blocks to load next.
 
 ## Pinyin
 

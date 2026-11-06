@@ -1,6 +1,7 @@
 // Build a search bundle in Node: wasm-search/compile.
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { constants, zstdCompressSync } from 'node:zlib';
 import initWasm, { compile } from '../wasm/wasm_search_wasm.js';
 import type { Profile, SearchDocument } from './model.js';
 
@@ -20,7 +21,8 @@ export async function compileBundle(
         jsonl += JSON.stringify(document) + '\n';
         count++;
     }
-    const bundle = compile(jsonl, JSON.stringify(profile));
+    const bundle = compile(jsonl, JSON.stringify(profile), (bytes: Uint8Array) =>
+        zstdCompressSync(bytes, { params: { [constants.ZSTD_c_compressionLevel]: 19, [constants.ZSTD_c_checksumFlag]: 0 } }));
     try {
         await rm(outDir, { recursive: true, force: true });
         await mkdir(outDir, { recursive: true });

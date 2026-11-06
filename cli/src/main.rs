@@ -46,7 +46,7 @@ fn build(args: &[String]) -> Result<()> {
         serde_json::json!({
             "documents": bundle.document_count,
             "lexicon_terms": bundle.lexicon_terms,
-            "files": bundle.artifacts.len() + 1,
+            "files": bundle.packs.len() + 1,
             "bytes": bundle.total_artifact_bytes(),
             "elapsed_ms": started.elapsed().as_millis(),
         })
@@ -70,11 +70,30 @@ fn query(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Runs one query per line of a file and prints each ranking as a JSON line, so two
+/// bundles or two engine versions can be compared over a whole query set.
+fn batch(args: &[String]) -> Result<()> {
+    let engine = load_engine(&PathBuf::from(required(args, "--bundle")?))?;
+    for line in fs::read_to_string(required(args, "--queries")?)?.lines().filter(|line| !line.trim().is_empty()) {
+        let request = Query { query: line.to_string(), offset: 0, limit: 10, sort: Default::default(), filters: Default::default() };
+        let started = Instant::now();
+        let response = engine.search(&request).map_err(anyhow::Error::msg)?;
+        println!("{}", serde_json::json!({
+            "query": line,
+            "total": response.total_candidates,
+            "micros": started.elapsed().as_micros() as u64,
+            "ids": response.results.iter().map(|result| result.id.as_str()).collect::<Vec<_>>(),
+        }));
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("build") => build(&args[2..]),
         Some("query") => query(&args[2..]),
-        _ => bail!("usage: wasm-search <build|query> ..."),
+        Some("batch") => batch(&args[2..]),
+        _ => bail!("usage: wasm-search <build|query|batch> ..."),
     }
 }

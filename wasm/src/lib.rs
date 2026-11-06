@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 use wasm_search_core::{
-    compile_search_bundle, CompiledBundle, IndexDocument, Profile, SearchSession,
+    compile_search_bundle_with, CompiledBundle, IndexDocument, Profile, SearchSession,
 };
 
 fn js_error(error: impl ToString) -> JsValue {
@@ -15,23 +15,8 @@ pub struct SearchEngine {
 #[wasm_bindgen]
 impl SearchEngine {
     #[wasm_bindgen(constructor)]
-    pub fn new(
-        documents: &[u8],
-        document_bytes: u32,
-        lexicon_index: &[u8],
-        lexicon_index_bytes: u32,
-        profile_json: &str,
-    ) -> Result<SearchEngine, JsValue> {
-        Ok(Self {
-            inner: SearchSession::new(
-                documents,
-                document_bytes,
-                lexicon_index,
-                lexicon_index_bytes,
-                profile_json,
-            )
-            .map_err(js_error)?,
-        })
+    pub fn new(index: &[u8], index_bytes: u32, profile_json: &str) -> Result<SearchEngine, JsValue> {
+        Ok(Self { inner: SearchSession::new(index, index_bytes, profile_json).map_err(js_error)? })
     }
 
     pub fn load_lexicon_block(
@@ -90,22 +75,20 @@ impl SearchEngine {
         self.inner.required_posting_chunks().map_err(js_error)
     }
 
-    pub fn required_document_blocks(&self) -> Result<String, JsValue> {
-        self.inner.required_document_blocks().map_err(js_error)
+    pub fn plan_search(&mut self) -> Result<String, JsValue> {
+        self.inner.plan_search().map_err(js_error)
     }
 
-    pub fn prepare_search(&mut self) -> Result<String, JsValue> {
-        self.inner.prepare_search().map_err(js_error)
+    pub fn ranked_results(&self) -> Result<String, JsValue> {
+        self.inner.ranked_results().map_err(js_error)
     }
 
-    pub fn required_content_chunks(&self, offset: u32, limit: u32) -> Result<String, JsValue> {
-        self.inner
-            .required_content_chunks(offset, limit)
-            .map_err(js_error)
+    pub fn required_content_chunks(&self) -> Result<String, JsValue> {
+        self.inner.required_content_chunks().map_err(js_error)
     }
 
-    pub fn hydrate_search(&self, offset: u32, limit: u32) -> Result<String, JsValue> {
-        self.inner.hydrate_search(offset, limit).map_err(js_error)
+    pub fn hydrate_search(&self) -> Result<String, JsValue> {
+        self.inner.hydrate_search().map_err(js_error)
     }
 
     pub fn filter_options(&self) -> Result<String, JsValue> {
@@ -130,21 +113,21 @@ impl Bundle {
     }
 
     pub fn file_count(&self) -> u32 {
-        self.inner.artifacts.len() as u32
+        self.inner.packs.len() as u32
     }
 
     pub fn file_path(&self, index: u32) -> String {
-        self.inner.artifacts[index as usize].reference.path.clone()
+        self.inner.manifest.packs[index as usize].clone()
     }
 
     pub fn file_bytes(&self, index: u32) -> Vec<u8> {
-        self.inner.artifacts[index as usize].bytes.clone()
+        self.inner.packs[index as usize].clone()
     }
 }
 
 /// Compile newline-delimited JSON documents into a bundle.
 #[wasm_bindgen]
-pub fn compile(documents_jsonl: &str, profile_json: &str) -> Result<Bundle, JsValue> {
+pub fn compile(documents_jsonl: &str, profile_json: &str, compress: &js_sys::Function) -> Result<Bundle, JsValue> {
     let documents = documents_jsonl
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -153,6 +136,11 @@ pub fn compile(documents_jsonl: &str, profile_json: &str) -> Result<Bundle, JsVa
         .map_err(js_error)?;
     let profile: Profile = serde_json::from_str(profile_json).map_err(js_error)?;
     Ok(Bundle {
-        inner: compile_search_bundle(documents, profile).map_err(js_error)?,
+        inner: compile_search_bundle_with(documents, profile, &mut |bytes| {
+            let input = js_sys::Uint8Array::from(bytes);
+            let output = compress.call1(&JsValue::NULL, &input).expect("compressor");
+            js_sys::Uint8Array::new(&output).to_vec()
+        })
+        .map_err(js_error)?,
     })
 }

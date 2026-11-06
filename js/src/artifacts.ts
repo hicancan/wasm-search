@@ -2,36 +2,30 @@ import { CacheStore } from './cache.js';
 import type { Profile } from './model.js';
 
 export interface ArtifactRef {
-    path: string;
+    pack: number;
+    offset: number;
     bytes: number;
     decoded_bytes: number;
 }
 
-export interface LexiconManifest {
-    index: ArtifactRef;
-    blocks: ArtifactRef[];
-}
-
-export interface DocumentManifest {
-    index: ArtifactRef;
-    blocks: ArtifactRef[];
+/** A block the engine asks for, handed back under `id`. */
+export interface BlockRef extends ArtifactRef {
+    id: number;
 }
 
 export interface SearchBundleManifest {
-    format: 'wasm-search-bundle-v2';
-    documents: DocumentManifest;
-    lexicon: LexiconManifest;
-    postings: ArtifactRef[];
-    content: ArtifactRef[];
+    format: 'wasm-search-bundle-v3';
+    index: ArtifactRef;
+    packs: string[];
     profile: Profile;
 }
 
 function parseManifest(value: unknown): SearchBundleManifest {
     const manifest = value as Partial<SearchBundleManifest> | null;
-    if (!manifest || manifest.format !== 'wasm-search-bundle-v2') {
+    if (!manifest || manifest.format !== 'wasm-search-bundle-v3') {
         throw new Error('unsupported search bundle format');
     }
-    if (!manifest.documents?.index || !manifest.documents.blocks?.length || !manifest.lexicon?.index || !manifest.lexicon.blocks?.length || !manifest.postings?.length || !manifest.content?.length) {
+    if (!manifest.index || !manifest.packs?.length) {
         throw new Error('incomplete search bundle manifest');
     }
     return manifest as SearchBundleManifest;
@@ -59,23 +53,30 @@ export class ArtifactSource {
         return this.manifestRequest;
     }
 
+    /** One block by byte range; a server that ignores the range still yields the same bytes. */
     bytes(reference: ArtifactRef, signal?: AbortSignal): Promise<ArrayBuffer> {
-        const cached = this.cache.get(reference.path);
+        const key = `${reference.pack}:${reference.offset}`;
+        const cached = this.cache.get(key);
         if (cached) return Promise.resolve(cached);
-        const active = this.requests.get(reference.path);
+        const active = this.requests.get(key);
         if (active) return active;
-        const request = this.read(reference.path, async response => {
-            const bytes = await response.arrayBuffer();
-            if (bytes.byteLength !== reference.bytes) throw new Error(`truncated ${reference.path}`);
-            this.cache.set(reference.path, bytes);
-            return bytes;
-        }, signal).finally(() => this.requests.delete(reference.path));
-        this.requests.set(reference.path, request);
+        const request = this.manifest(signal).then(manifest => {
+            const path = manifest.packs[reference.pack];
+            if (!path) throw new Error(`search bundle pack does not exist: ${reference.pack}`);
+            return this.read(path, async response => {
+                const body = await response.arrayBuffer();
+                const bytes = response.status === 206 ? body : body.slice(reference.offset, reference.offset + reference.bytes);
+                if (bytes.byteLength !== reference.bytes) throw new Error(`truncated ${path}`);
+                this.cache.set(key, bytes);
+                return bytes;
+            }, signal, `bytes=${reference.offset}-${reference.offset + reference.bytes - 1}`);
+        }).finally(() => this.requests.delete(key));
+        this.requests.set(key, request);
         return request;
     }
 
     /** Keep the slot until the body is consumed: HTTP/2 streams outlive response headers. */
-    private async read<T>(path: string, decode: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    private async read<T>(path: string, decode: (response: Response) => Promise<T>, signal?: AbortSignal, range?: string): Promise<T> {
         signal?.throwIfAborted();
         if (this.activeReads >= 16) {
             await new Promise<void>((resolve, reject) => {
@@ -97,7 +98,7 @@ export class ArtifactSource {
             for (let attempt = 0; ; attempt++) {
                 signal?.throwIfAborted();
                 try {
-                    const response = await fetch(`${this.baseUrl}/${path}`, { signal });
+                    const response = await fetch(`${this.baseUrl}/${path}`, { signal, headers: range ? { Range: range } : undefined });
                     if (!response.ok) throw new Error(`failed to load ${path} (${response.status})`);
                     return await decode(response);
                 } catch (error) {
