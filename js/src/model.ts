@@ -8,6 +8,8 @@ export interface SearchFilters {
     publishedFrom?: string;
     publishedTo?: string;
     includeUndated?: boolean;
+    /** Only documents belonging to this entity, directly or through what it contains. */
+    within?: string;
 }
 
 export interface Query {

@@ -309,21 +309,27 @@ pub fn compile_search_bundle_with(
         .collect();
     // A category or date of zero means none, so dates compare as they sort.
     let position = |list: &[String], value: &str| list.binary_search_by(|item| item.as_str().cmp(value)).expect("listed") as u32;
+    let mut entities: Vec<String> = documents.iter().flat_map(|document| document.within.iter().cloned()).collect();
+    entities.sort();
+    entities.dedup();
     let rows = metas
         .iter()
-        .map(|document| RankRow {
+        .zip(documents)
+        .map(|(document, source)| RankRow {
             source: position(&sources, &document.source),
             category: document.category.as_deref().map_or(0, |value| position(&categories, value) + 1),
             date: document.published_at.as_deref().map_or(0, |value| position(&dates, value) + 1),
             kind: document.kind,
             title: normalize_text(&document.title),
             url_group: url_groups.get(document.url.as_str()).copied().unwrap_or(0),
+            within: source.within.iter().map(|entity| position(&entities, entity)).collect(),
         })
         .collect();
     let index = BundleIndex {
         sources,
         categories,
         dates,
+        entities,
         rows,
         block_starts: document_block_starts,
         filter_options,

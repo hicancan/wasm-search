@@ -14,7 +14,7 @@ export interface BlockRef extends ArtifactRef {
 }
 
 export interface SearchBundleManifest {
-    format: 'wasm-search-bundle-v3';
+    format: 'wasm-search-bundle-v4';
     index: ArtifactRef;
     packs: string[];
     /** Faster addresses for the packs, by position; `packs` remains the fallback. */
@@ -24,7 +24,7 @@ export interface SearchBundleManifest {
 
 function parseManifest(value: unknown): SearchBundleManifest {
     const manifest = value as Partial<SearchBundleManifest> | null;
-    if (!manifest || manifest.format !== 'wasm-search-bundle-v3') {
+    if (!manifest || manifest.format !== 'wasm-search-bundle-v4') {
         throw new Error('unsupported search bundle format');
     }
     if (!manifest.index || !manifest.packs?.length) {

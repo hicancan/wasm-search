@@ -29,7 +29,7 @@ vi.mock('../wasm/wasm_search_wasm.js', () => ({
 import { SearchRuntime } from './runtime.js';
 
 const manifest: SearchBundleManifest = {
-    format: 'wasm-search-bundle-v3',
+    format: 'wasm-search-bundle-v4',
     index: { pack: 0, offset: 0, bytes: 4, decoded_bytes: 4 },
     packs: ['pack-000.bin', 'pack-001.bin', 'pack-002.bin', 'pack-003.bin', 'pack-004.bin'],
     profile: { aliases: [] },

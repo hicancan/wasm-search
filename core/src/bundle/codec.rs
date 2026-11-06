@@ -254,6 +254,8 @@ pub struct RankRow {
     pub kind: DocumentKind,
     pub title: String,
     pub url_group: u32,
+    /// Positions in `BundleIndex::entities`.
+    pub within: Vec<u32>,
 }
 
 /// The one read a client makes before its first query.
@@ -262,6 +264,7 @@ pub struct BundleIndex {
     pub sources: Vec<String>,
     pub categories: Vec<String>,
     pub dates: Vec<String>,
+    pub entities: Vec<String>,
     pub rows: Vec<RankRow>,
     pub block_starts: Vec<u32>,
     pub filter_options: FilterOptions,
@@ -296,7 +299,7 @@ fn decode_table(reader: &mut Reader<'_>, cursor: &mut (u32, u64)) -> Result<Vec<
 
 pub(super) fn encode_index(index: &BundleIndex) -> Vec<u8> {
     let mut writer = Writer::new(INDEX_MAGIC);
-    for list in [&index.sources, &index.categories, &index.dates] {
+    for list in [&index.sources, &index.categories, &index.dates, &index.entities] {
         writer.var_u32(list.len() as u32);
         for value in list {
             writer.string(value);
@@ -310,6 +313,10 @@ pub(super) fn encode_index(index: &BundleIndex) -> Vec<u8> {
         writer.u8(encode_kind(row.kind));
         writer.string(&row.title);
         writer.var_u32(row.url_group);
+        writer.var_u32(row.within.len() as u32);
+        for entity in &row.within {
+            writer.var_u32(*entity);
+        }
     }
     writer.var_u32(index.block_starts.len() as u32);
     let mut previous = 0;
@@ -334,7 +341,7 @@ pub(crate) fn decode_index(bytes: &[u8]) -> Result<BundleIndex, String> {
         let count = reader.var_u32()? as usize;
         (0..count).map(|_| reader.string()).collect()
     };
-    let (sources, categories, dates) = (strings()?, strings()?, strings()?);
+    let (sources, categories, dates, entities) = (strings()?, strings()?, strings()?, strings()?);
     let count = reader.var_u32()? as usize;
     let mut rows = Vec::with_capacity(count);
     for _ in 0..count {
@@ -344,7 +351,12 @@ pub(crate) fn decode_index(bytes: &[u8]) -> Result<BundleIndex, String> {
         let kind = decode_kind(reader.u8()?)?;
         let title = reader.string()?;
         let url_group = reader.var_u32()?;
-        rows.push(RankRow { source, category, date, kind, title, url_group });
+        let belongs = reader.var_u32()? as usize;
+        let mut within = Vec::with_capacity(belongs);
+        for _ in 0..belongs {
+            within.push(reader.var_u32()?);
+        }
+        rows.push(RankRow { source, category, date, kind, title, url_group, within });
     }
     let count = reader.var_u32()? as usize;
     let mut block_starts = Vec::with_capacity(count);
@@ -367,7 +379,7 @@ pub(crate) fn decode_index(bytes: &[u8]) -> Result<BundleIndex, String> {
         content: decode_table(&mut reader, &mut cursor)?,
     };
     reader.finish()?;
-    Ok(BundleIndex { sources, categories, dates, rows, block_starts, filter_options, lexicon_firsts, tables })
+    Ok(BundleIndex { sources, categories, dates, entities, rows, block_starts, filter_options, lexicon_firsts, tables })
 }
 
 pub(super) fn encode_document_block(start: u32, documents: &[DocumentMeta]) -> Vec<u8> {

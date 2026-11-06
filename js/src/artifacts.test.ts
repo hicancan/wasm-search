@@ -6,7 +6,7 @@ import type { ArtifactRef, SearchBundleManifest } from './artifacts.js';
 
 const bytes = new Uint8Array([1, 2, 3]);
 const reference: ArtifactRef = { pack: 0, offset: 0, bytes: bytes.byteLength, decoded_bytes: 3 };
-const manifest: SearchBundleManifest = { format: 'wasm-search-bundle-v3', index: reference, packs: ['pack-000.bin'], profile: { aliases: [] } };
+const manifest: SearchBundleManifest = { format: 'wasm-search-bundle-v4', index: reference, packs: ['pack-000.bin'], profile: { aliases: [] } };
 const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200 });
 const ranged = (body: BodyInit = bytes) => new Response(body, { status: 206 });
 /** A server: the manifest by name, everything else from `pack`. */

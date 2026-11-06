@@ -1,7 +1,7 @@
 use crate::profile::Profile;
 use serde::{Deserialize, Serialize};
 
-pub const SEARCH_BUNDLE_FORMAT: &str = "wasm-search-bundle-v3";
+pub const SEARCH_BUNDLE_FORMAT: &str = "wasm-search-bundle-v4";
 
 /// A byte range of a pack file, compressed on its own.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

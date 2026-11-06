@@ -18,6 +18,7 @@ fn documents() -> Vec<IndexDocument> {
             section: Some("通知公告".to_string()),
             kind: DocumentKind::Page,
             category: None,
+            within: Vec::new(),
             tags: vec!["本科生".to_string()],
             attachments: vec![Attachment {
                 url: "https://example.test/a.pdf".to_string(),
@@ -37,6 +38,7 @@ fn documents() -> Vec<IndexDocument> {
             section: Some("新闻".to_string()),
             kind: DocumentKind::Page,
             category: None,
+            within: Vec::new(),
             tags: vec![],
             attachments: vec![],
         },
@@ -52,6 +54,7 @@ fn documents() -> Vec<IndexDocument> {
             section: Some("政策".to_string()),
             kind: DocumentKind::Page,
             category: None,
+            within: Vec::new(),
             tags: vec![],
             attachments: vec![],
         },
@@ -137,6 +140,7 @@ fn candidate_contract_documents() -> Vec<IndexDocument> {
                 DocumentKind::Page
             },
             category: None,
+            within: Vec::new(),
             tags: vec![],
             attachments: vec![],
         });
@@ -158,6 +162,7 @@ fn candidate_contract_documents() -> Vec<IndexDocument> {
             section: Some("通知公告".to_string()),
             kind: DocumentKind::Page,
             category: None,
+            within: Vec::new(),
             tags: vec![],
             attachments: vec![],
         });
@@ -440,6 +445,7 @@ fn result_page_does_not_repeat_same_day_department_reposts() {
         section: Some("通知公告".to_string()),
         kind: DocumentKind::Page,
         category: None,
+        within: Vec::new(),
         tags: vec![],
         attachments: vec![],
     });
@@ -455,6 +461,7 @@ fn result_page_does_not_repeat_same_day_department_reposts() {
         section: Some("通知公告".to_string()),
         kind: DocumentKind::Page,
         category: None,
+        within: Vec::new(),
         tags: vec![],
         attachments: vec![],
     });
@@ -562,6 +569,7 @@ fn filters_cannot_reenable_partial_fallback_candidates() {
             section: Some("通知公告".to_string()),
             kind: DocumentKind::Page,
             category: None,
+            within: Vec::new(),
             tags: vec![],
             attachments: vec![],
         });
@@ -579,6 +587,7 @@ fn filters_cannot_reenable_partial_fallback_candidates() {
             section: Some("考试通知".to_string()),
             kind: DocumentKind::Page,
             category: None,
+            within: Vec::new(),
             tags: vec![],
             attachments: vec![],
         });
@@ -631,6 +640,7 @@ fn canonical_reposts_preserve_filter_monotonicity_after_deduplication() {
             section: Some("通知公告".to_string()),
             kind: DocumentKind::Page,
             category: None,
+            within: Vec::new(),
             tags: vec![],
             attachments: vec![],
         },
@@ -646,6 +656,7 @@ fn canonical_reposts_preserve_filter_monotonicity_after_deduplication() {
             section: Some("通知公告".to_string()),
             kind: DocumentKind::Page,
             category: None,
+            within: Vec::new(),
             tags: vec![],
             attachments: vec![],
         },
@@ -687,6 +698,7 @@ fn query_plan_can_page_beyond_the_old_one_hundred_result_ui_cap() {
             section: Some("新闻".to_string()),
             kind: DocumentKind::Page,
             category: None,
+            within: Vec::new(),
             tags: vec![],
             attachments: vec![],
         })
@@ -720,6 +732,7 @@ fn offset_pages_through_one_stable_ranking_and_returns_highlights() {
             section: None,
             kind: DocumentKind::Page,
             category: None,
+            within: Vec::new(),
             tags: vec![],
             attachments: vec![],
         })
@@ -760,6 +773,7 @@ fn a_title_that_names_the_query_outranks_newer_titles_that_mention_it() {
         section: None,
         kind: DocumentKind::Page,
         category: None,
+        within: Vec::new(),
         tags: vec![],
         attachments: vec![],
     };
@@ -775,4 +789,42 @@ fn a_title_that_names_the_query_outranks_newer_titles_that_mention_it() {
     .expect("compile");
     let order: Vec<String> = engine(&bundle).search(&request("操作系统")).unwrap().results.into_iter().map(|result| result.id).collect();
     assert_eq!(order, ["exact", "longer", "mention-new", "mention-old"]);
+}
+
+fn total(bundle: &CompiledBundle, query: &Query) -> usize {
+    let (lazy, plan) = lazy_page(bundle, query);
+    lazy.result_shells(&plan, 0, 1).unwrap().total_candidates
+}
+
+#[test]
+fn an_empty_query_lists_what_the_filters_admit_newest_first() {
+    let bundle = compile_search_bundle(documents(), Profile::default()).unwrap();
+    let (lazy, plan) = lazy_page(&bundle, &request(""));
+    let results = lazy.result_shells(&plan, 0, 100).unwrap().results;
+    assert!(results.len() > 1);
+    let dated: Vec<_> = results.iter().filter_map(|result| result.published_at.clone()).collect();
+    let mut sorted = dated.clone();
+    sorted.sort_by(|left, right| right.cmp(left));
+    assert_eq!(dated, sorted);
+
+    let mut office = request("");
+    office.filters.source_ids = vec!["office".to_string()];
+    assert_eq!(total(&bundle, &office), 1);
+
+    assert!(index_engine(&bundle).begin_query(&request("转")).is_err());
+}
+
+#[test]
+fn within_finds_a_document_through_any_entity_that_contains_it() {
+    let mut values = documents();
+    values[0].within = vec!["校区".to_string(), "校区/楼".to_string(), "校区/楼/教室".to_string()];
+    let bundle = compile_search_bundle(values, Profile::default()).unwrap();
+    for (entity, expected) in [("校区/楼", 1), ("校区/楼/教室", 1), ("别处", 0)] {
+        let mut query = request("");
+        query.filters.within = Some(entity.to_string());
+        assert_eq!(total(&bundle, &query), expected, "{entity}");
+    }
+    let mut words = request("转专业");
+    words.filters.within = Some("校区".to_string());
+    assert_eq!(total(&bundle, &words), 1);
 }

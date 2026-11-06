@@ -71,8 +71,8 @@ export class SearchRuntime {
         onRanked: (response: SearchResponse) => void,
         signal?: AbortSignal,
     ): Promise<SearchResponse> {
-        if (query.query.trim().length < 2) {
-            throw new Error('query must contain at least two characters');
+        if (query.query.trim().length === 1) {
+            throw new Error('a query must be empty or contain at least two characters');
         }
         // Blocks only accumulate between queries; past the budget, start clean.
         if (this.loadedBytes > this.workingSetBudgetBytes) this.resetEngine();

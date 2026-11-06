@@ -43,6 +43,10 @@ pub struct IndexDocument {
     pub tags: Vec<String>,
     #[serde(default, rename = "files")]
     pub attachments: Vec<Attachment>,
+    /// The entities this document belongs to, ancestors included: a room's document
+    /// names its floor, building and campus, so asking within any of them finds it.
+    #[serde(default)]
+    pub within: Vec<String>,
 }
 
 #[derive(Clone, Debug)]

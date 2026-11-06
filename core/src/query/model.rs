@@ -14,6 +14,8 @@ pub struct SearchFilters {
     pub published_to: Option<String>,
     #[serde(default)]
     pub include_undated: bool,
+    /// Only documents belonging to this entity, directly or through what it contains.
+    pub within: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -27,6 +29,7 @@ pub enum SortMode {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Query {
+    /// May be empty: then the filters alone decide, newest first.
     pub query: String,
     /// How many ranked results to skip, for paging.
     #[serde(default)]

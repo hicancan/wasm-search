@@ -20,6 +20,7 @@ pub struct SearchEngine {
     sources: Vec<String>,
     categories: Vec<String>,
     dates: Vec<String>,
+    entities: Vec<String>,
     rows: Vec<RankRow>,
     tables: BlockTables,
     documents: HashMap<u32, DocumentMeta>,
@@ -136,13 +137,14 @@ pub struct QueryPreparation {
 
 impl SearchEngine {
     pub fn new(index: &[u8], index_bytes: u64, profile: Profile) -> Result<Self, String> {
-        let BundleIndex { sources, categories, dates, rows, block_starts, filter_options, lexicon_firsts, tables } =
+        let BundleIndex { sources, categories, dates, entities, rows, block_starts, filter_options, lexicon_firsts, tables } =
             decode_index(&decompress_artifact(index, index_bytes)?)?;
         Ok(Self {
             profile,
             sources,
             categories,
             dates,
+            entities,
             rows,
             tables,
             documents: HashMap::new(),
@@ -333,8 +335,8 @@ impl SearchEngine {
     }
 
     fn validate_request(request: &Query) -> Result<(), String> {
-        if normalize_text(&request.query).chars().count() < 2 {
-            return Err("query must contain at least two normalized characters".to_string());
+        if normalize_text(&request.query).chars().count() == 1 {
+            return Err("a query must be empty or contain at least two normalized characters".to_string());
         }
         if !(1..=MAX_QUERY_LIMIT).contains(&request.limit) {
             return Err(format!(
@@ -392,6 +394,14 @@ impl SearchEngine {
         }
         if filters.excluded_source_ids.contains(source) {
             return false;
+        }
+        if let Some(entity) = &filters.within {
+            let Ok(position) = self.entities.binary_search(entity) else {
+                return false;
+            };
+            if !row.within.contains(&(position as u32)) {
+                return false;
+            }
         }
         if let Some(category) = &filters.category {
             if row.category == 0 || &self.categories[row.category as usize - 1] != category {
@@ -534,6 +544,10 @@ impl SearchEngine {
             }
         }
 
+        if analysis.normalized.is_empty() {
+            return Ok(self.browse(request));
+        }
+
         let mut ranked: Vec<_> = touched
             .into_iter()
             .map(|document| {
@@ -566,10 +580,40 @@ impl SearchEngine {
             ranked.retain(|candidate| candidate.tier >= MatchTier::MinimumShouldMatch);
         }
         ranked.retain(|candidate| self.matches_filters(&self.rows[candidate.document as usize], request));
+        self.order(&mut ranked, request.sort, analysis.normalized.chars().count());
+        self.collapse(&mut ranked);
+        Ok(QueryPlan {
+            query: request.query.clone(),
+            total_candidates: ranked.len(),
+            ranked,
+        })
+    }
 
-        match request.sort {
+    /// With no words, the filters alone decide: everything they admit, newest first,
+    /// undated documents after in the order they were given.
+    fn browse(&self, request: &Query) -> QueryPlan {
+        let mut ranked: Vec<_> = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| self.matches_filters(row, request))
+            .map(|(document, row)| RankedCandidate {
+                document: document as u32,
+                score: 0.0,
+                tier: MatchTier::Partial,
+                title_chars: row.title.chars().count(),
+                source_fit: false,
+                matched_terms: Vec::new(),
+            })
+            .collect();
+        self.order(&mut ranked, SortMode::DateDesc, 0);
+        self.collapse(&mut ranked);
+        QueryPlan { query: String::new(), total_candidates: ranked.len(), ranked }
+    }
+
+    fn order(&self, ranked: &mut [RankedCandidate], sort: SortMode, query_chars: usize) {
+        match sort {
             SortMode::Relevance => ranked.sort_by(|left, right| {
-                let query_chars = analysis.normalized.chars().count();
                 right
                     .tier
                     .relevance_band(right.title_chars, query_chars)
@@ -589,7 +633,10 @@ impl SearchEngine {
                     .then_with(|| left.document.cmp(&right.document))
             }),
         }
+    }
 
+    /// One result per URL, and one per dated title: the same notice on two sites is one notice.
+    fn collapse(&self, ranked: &mut Vec<RankedCandidate>) {
         let mut seen_urls = HashSet::new();
         let mut seen_presentations = HashSet::new();
         ranked.retain(|candidate| {
@@ -606,11 +653,6 @@ impl SearchEngine {
             }
             seen_presentations.insert((row.date, title))
         });
-        Ok(QueryPlan {
-            query: request.query.clone(),
-            total_candidates: ranked.len(),
-            ranked,
-        })
     }
 
     fn result(
