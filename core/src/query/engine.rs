@@ -45,9 +45,14 @@ enum MatchTier {
 }
 
 impl MatchTier {
-    fn relevance_band(self) -> u8 {
+    /// Results within a band are ordered newest first. A title that is mostly the
+    /// query names the thing being looked for, so it stands above any that merely
+    /// mention it, however recent.
+    fn relevance_band(self, title_chars: usize, query_chars: usize) -> u8 {
         match self {
-            Self::TitleEquals | Self::TitleStartsWith | Self::TitleContains => 5,
+            Self::TitleEquals => 7,
+            Self::TitleStartsWith | Self::TitleContains if query_chars * 2 >= title_chars => 6,
+            Self::TitleStartsWith | Self::TitleContains => 5,
             Self::AllTitleTerms => 4,
             Self::AllBodyTerms | Self::PinyinTitle => 3,
             Self::MinimumShouldMatch | Self::PinyinBody => 2,
@@ -68,6 +73,7 @@ struct RankedCandidate {
     document: u32,
     score: f32,
     tier: MatchTier,
+    title_chars: usize,
     source_fit: bool,
     matched_terms: Vec<String>,
 }
@@ -535,10 +541,6 @@ impl SearchEngine {
         {
             tier = MatchTier::MinimumShouldMatch;
         }
-        if self.documents[document_index].published_at.is_none() && tier > MatchTier::AllTitleTerms
-        {
-            tier = MatchTier::AllTitleTerms;
-        }
         tier
     }
 
@@ -611,6 +613,7 @@ impl SearchEngine {
                     document,
                     score: state.score,
                     tier: self.match_tier(document as usize, &state, analysis),
+                    title_chars: self.normalized_titles[document as usize].chars().count(),
                     source_fit: analysis
                         .preferred_sources
                         .contains(&self.documents[document as usize].source),
@@ -637,10 +640,11 @@ impl SearchEngine {
 
         match request.sort {
             SortMode::Relevance => ranked.sort_by(|left, right| {
+                let query_chars = analysis.normalized.chars().count();
                 right
                     .tier
-                    .relevance_band()
-                    .cmp(&left.tier.relevance_band())
+                    .relevance_band(right.title_chars, query_chars)
+                    .cmp(&left.tier.relevance_band(left.title_chars, query_chars))
                     .then_with(|| right.source_fit.cmp(&left.source_fit))
                     .then_with(|| {
                         self.documents[right.document as usize]

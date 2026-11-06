@@ -837,3 +837,34 @@ fn offset_pages_through_one_stable_ranking_and_returns_highlights() {
     query.filters.source_ids = vec!["even".to_string(), "missing".to_string()];
     assert_eq!(engine.search(&query).unwrap().total_candidates, 13);
 }
+
+#[test]
+fn a_title_that_names_the_query_outranks_newer_titles_that_mention_it() {
+    let document = |id: &str, title: &str, date: Option<&str>| IndexDocument {
+        id: id.to_string(),
+        source: "s".to_string(),
+        source_name: "来源".to_string(),
+        url: format!("https://example.test/{id}"),
+        title: title.to_string(),
+        content: String::new(),
+        published_at: date.map(str::to_string),
+        updated_at: None,
+        section: None,
+        kind: DocumentKind::Page,
+        category: None,
+        tags: vec![],
+        attachments: vec![],
+    };
+    let bundle = compile_search_bundle(
+        vec![
+            document("mention-new", "2026年第九次教学沙龙关于操作系统课程建设的讨论", Some("2026-01-01")),
+            document("mention-old", "2016年第一次教学沙龙关于操作系统课程建设的讨论", Some("2016-01-01")),
+            document("longer", "操作系统基础", None),
+            document("exact", "操作系统", None),
+        ],
+        Profile::default(),
+    )
+    .expect("compile");
+    let order: Vec<String> = engine(&bundle).search(&request("操作系统")).unwrap().results.into_iter().map(|result| result.id).collect();
+    assert_eq!(order, ["exact", "longer", "mention-new", "mention-old"]);
+}
