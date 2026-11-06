@@ -1,7 +1,8 @@
 export type SortMode = 'relevance' | 'date_desc';
 
 export interface SearchFilters {
-    sourceId?: string;
+    /** When not empty, only these sources. */
+    sourceIds?: string[];
     excludedSourceIds?: string[];
     category?: string;
     publishedFrom?: string;
@@ -11,6 +12,8 @@ export interface SearchFilters {
 
 export interface Query {
     query: string;
+    /** How many ranked results to skip, for paging. */
+    offset?: number;
     limit: number;
     sort: SortMode;
     filters: SearchFilters;
@@ -36,7 +39,10 @@ export interface SearchResult {
     kind: DocumentKind;
     category: string | null;
     snippet: string | null;
-    matchedTerms: string[];
+    /** Matched `[start, end)` ranges of the title, counted in Unicode scalar values. */
+    titleHighlights: [number, number][];
+    /** The same for the snippet. */
+    snippetHighlights: [number, number][];
     attachments: SearchAttachment[];
 }
 

@@ -56,6 +56,13 @@ const { totalCandidates, results } = await client.search(
 );
 ```
 
+`offset` pages through one stable ranking; `totalCandidates` counts every match.
+`filters.sourceIds` narrows to several sources and `excludedSourceIds` removes
+them. Each hydrated result has a `snippet`, the window holding the most different
+matched terms, and `titleHighlights` / `snippetHighlights`: ascending `[start, end)`
+ranges counted in Unicode scalar values, so every client marks the same characters
+without analysing text itself.
+
 Bundles are immutable: serve each build from its own directory and cache it
 forever.
 

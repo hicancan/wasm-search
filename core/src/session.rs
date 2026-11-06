@@ -10,6 +10,7 @@ pub struct SearchSession {
     preparation: Option<QueryPreparation>,
     plan: Option<QueryPlan>,
     plan_request: Option<Query>,
+    page_offset: usize,
     page_limit: usize,
 }
 
@@ -34,6 +35,7 @@ impl SearchSession {
             preparation: None,
             plan: None,
             plan_request: None,
+            page_offset: 0,
             page_limit: 0,
         })
     }
@@ -88,6 +90,7 @@ impl SearchSession {
 
     pub fn begin_search(&mut self, request_json: &str) -> Result<String, String> {
         let request: Query = serde_json::from_str(request_json).map_err(message)?;
+        self.page_offset = request.offset;
         self.page_limit = request.limit;
         let same_query = self.plan_request.as_ref().is_some_and(|previous| {
             previous.query == request.query
@@ -139,7 +142,7 @@ impl SearchSession {
                 self.plan
                     .as_ref()
                     .ok_or_else(|| message("query is not prepared"))?,
-                0,
+                self.page_offset,
                 self.page_limit,
             )
             .map_err(message)?;

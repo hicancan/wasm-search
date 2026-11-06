@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SearchFilters {
-    pub source_id: Option<String>,
+    /// When not empty, only these sources.
+    #[serde(default)]
+    pub source_ids: Vec<String>,
     #[serde(default)]
     pub excluded_source_ids: Vec<String>,
     pub category: Option<String>,
@@ -26,6 +28,9 @@ pub enum SortMode {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Query {
     pub query: String,
+    /// How many ranked results to skip, for paging.
+    #[serde(default)]
+    pub offset: usize,
     #[serde(default = "default_limit")]
     pub limit: usize,
     #[serde(default)]
@@ -60,7 +65,10 @@ pub struct SearchResult {
     pub kind: DocumentKind,
     pub category: Option<String>,
     pub snippet: Option<String>,
-    pub matched_terms: Vec<String>,
+    /// Matched `[start, end)` ranges of the title, in Unicode scalar values.
+    pub title_highlights: Vec<[u32; 2]>,
+    /// The same for the snippet.
+    pub snippet_highlights: Vec<[u32; 2]>,
     pub attachments: Vec<SearchAttachment>,
 }
 

@@ -179,6 +179,7 @@ fn candidate_contract_documents() -> Vec<IndexDocument> {
 fn request(query: &str) -> Query {
     Query {
         query: query.to_string(),
+        offset: 0,
         limit: 100,
         sort: SortMode::Relevance,
         filters: Default::default(),
@@ -214,6 +215,7 @@ fn compiles_and_queries_the_current_bundle_contract() {
     let response = engine
         .search(&Query {
             query: "转专业".to_string(),
+            offset: 0,
             limit: 10,
             sort: Default::default(),
             filters: Default::default(),
@@ -312,7 +314,7 @@ fn filtered_and_date_queries_load_only_candidate_document_blocks() {
     assert!(bundle.manifest.documents.blocks.len() > 3);
     let eager = engine(&bundle);
     for filters in [
-        serde_json::json!({"sourceId":"office"}),
+        serde_json::json!({"sourceIds":["office"]}),
         serde_json::json!({"excludedSourceIds":["office"]}),
         serde_json::json!({"category":"exam"}),
         serde_json::json!({"publishedFrom":"2026-07-10"}),
@@ -325,6 +327,7 @@ fn filtered_and_date_queries_load_only_candidate_document_blocks() {
             }
             let query = Query {
                 query: "scholarship".into(),
+                offset: 0,
                 limit: 10,
                 sort,
                 filters: serde_json::from_value(filters.clone()).expect("filters"),
@@ -421,6 +424,7 @@ fn one_query_plan_keeps_exact_order_while_snippets_are_hydrated() {
     let mut engine = engine(&bundle);
     let request = Query {
         query: "转专业".to_string(),
+        offset: 0,
         limit: 10,
         sort: Default::default(),
         filters: Default::default(),
@@ -468,22 +472,23 @@ fn rejects_ui_sentinels_and_invalid_dates() {
     let engine = engine(&bundle);
     let mut query = Query {
         query: "转专业".to_string(),
+        offset: 0,
         limit: 10,
         sort: Default::default(),
         filters: Default::default(),
     };
-    query.filters.source_id = Some("all".to_string());
+    query.filters.source_ids = vec!["all".to_string()];
     assert!(engine.search(&query).unwrap_err().contains("real source"));
-    query.filters.source_id = None;
+    query.filters.source_ids.clear();
     query.filters.excluded_source_ids = vec!["source-a".to_string(), "source-a".to_string()];
     assert!(engine.search(&query).unwrap_err().contains("duplicates"));
     query.filters.excluded_source_ids = vec!["source-a".to_string()];
-    query.filters.source_id = Some("source-a".to_string());
+    query.filters.source_ids = vec!["source-a".to_string()];
     assert!(engine
         .search(&query)
         .unwrap_err()
-        .contains("also be excluded"));
-    query.filters.source_id = None;
+        .contains("both included and excluded"));
+    query.filters.source_ids.clear();
     query.filters.excluded_source_ids.clear();
     query.filters.published_from = Some("2026-02-30".to_string());
     assert!(engine.search(&query).unwrap_err().contains("invalid date"));
@@ -549,6 +554,7 @@ fn result_page_does_not_repeat_same_day_department_reposts() {
     let response = engine(&bundle)
         .search(&Query {
             query: "数学建模竞赛报名".to_string(),
+            offset: 0,
             limit: 10,
             sort: Default::default(),
             filters: Default::default(),
@@ -578,7 +584,7 @@ fn complete_body_matches_survive_title_matches_and_source_filtering_is_monotone(
     assert_eq!(all.total_candidates, 14);
 
     let mut source_request = request("肖甫");
-    source_request.filters.source_id = Some("source-b".to_string());
+    source_request.filters.source_ids = vec!["source-b".to_string()];
     let source = engine.search(&source_request).expect("source B");
     assert_eq!(source.total_candidates, 9);
     assert!(urls(&source).is_subset(&urls(&all)));
@@ -675,7 +681,7 @@ fn filters_cannot_reenable_partial_fallback_candidates() {
     assert_eq!(all.total_candidates, 20);
 
     let mut source_request = request("项目申报");
-    source_request.filters.source_id = Some("partial".to_string());
+    source_request.filters.source_ids = vec!["partial".to_string()];
     assert_eq!(
         engine
             .search(&source_request)
@@ -742,7 +748,7 @@ fn canonical_reposts_preserve_filter_monotonicity_after_deduplication() {
     assert_eq!(all.total_candidates, 1);
 
     let mut source_request = request("肖甫");
-    source_request.filters.source_id = Some("source-b".to_string());
+    source_request.filters.source_ids = vec!["source-b".to_string()];
     let source = engine.search(&source_request).expect("source B");
     assert_eq!(source.total_candidates, 1);
     let all_keys = all
@@ -781,6 +787,7 @@ fn query_plan_can_page_beyond_the_old_one_hundred_result_ui_cap() {
     let response = engine(&bundle)
         .search(&Query {
             query: "肖甫".to_string(),
+            offset: 0,
             limit: 101,
             sort: SortMode::Relevance,
             filters: Default::default(),
@@ -788,4 +795,45 @@ fn query_plan_can_page_beyond_the_old_one_hundred_result_ui_cap() {
         .expect("search");
     assert_eq!(response.total_candidates, 101);
     assert_eq!(response.results.len(), 101);
+}
+
+#[test]
+fn offset_pages_through_one_stable_ranking_and_returns_highlights() {
+    let documents: Vec<IndexDocument> = (0..25)
+        .map(|index| IndexDocument {
+            id: format!("d{index:02}"),
+            source: if index % 2 == 0 { "even" } else { "odd" }.to_string(),
+            source_name: "来源".to_string(),
+            url: format!("https://example.test/{index}"),
+            title: format!("奖学金通知 {index:02}"),
+            content: "关于奖学金评定的说明".to_string(),
+            published_at: Some(format!("2026-01-{:02}", index + 1)),
+            updated_at: None,
+            section: None,
+            kind: DocumentKind::Page,
+            category: None,
+            tags: vec![],
+            attachments: vec![],
+        })
+        .collect();
+    let bundle = compile_search_bundle(documents, Profile::default()).expect("compile");
+    let engine = engine(&bundle);
+    let mut query = request("奖学金");
+    query.limit = 25;
+    let all: Vec<String> = engine.search(&query).unwrap().results.into_iter().map(|result| result.id).collect();
+    assert_eq!(all.len(), 25);
+    query.limit = 10;
+    let mut paged = Vec::new();
+    for page in 0..3 {
+        query.offset = page * 10;
+        let response = engine.search(&query).unwrap();
+        assert_eq!(response.total_candidates, 25);
+        assert_eq!(response.results[0].title_highlights, [[0, 3]]);
+        assert!(!response.results[0].snippet_highlights.is_empty());
+        paged.extend(response.results.into_iter().map(|result| result.id));
+    }
+    assert_eq!(paged, all);
+    query.offset = 0;
+    query.filters.source_ids = vec!["even".to_string(), "missing".to_string()];
+    assert_eq!(engine.search(&query).unwrap().total_candidates, 13);
 }

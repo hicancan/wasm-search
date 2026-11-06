@@ -2,7 +2,7 @@ use super::model::{
     FilterOptions, Query, SearchAttachment, SearchResponse, SearchResult, SortMode,
 };
 use super::ranking::posting_score;
-use super::snippet::build_snippet;
+use super::snippet::{build_snippet, highlight_ranges};
 use crate::analysis::{analyze_search_query, normalize_text, QueryAnalysis};
 use crate::bundle::{
     decode_content, decode_document_block, decode_document_index, decode_lexicon_block,
@@ -343,7 +343,7 @@ impl SearchEngine {
                 .filter(|block| !self.loaded_document_blocks.contains(block))
                 .collect();
         }
-        let candidate_limit = preparation.request.limit.max(10);
+        let candidate_limit = (preparation.request.offset + preparation.request.limit).max(10);
         let mut candidates: Vec<_> = scores.into_iter().collect();
         candidates.sort_by(|(left_doc, left_score), (right_doc, right_score)| {
             right_score
@@ -391,13 +391,12 @@ impl SearchEngine {
                 "query limit must be between 1 and {MAX_QUERY_LIMIT}"
             ));
         }
-        if request
-            .filters
-            .source_id
-            .as_deref()
-            .is_some_and(|source| source.trim().is_empty() || source == "all")
+        let sources = &request.filters.source_ids;
+        if sources
+            .iter()
+            .any(|source| source.trim().is_empty() || source == "all")
         {
-            return Err("sourceId must be a real source identity".to_string());
+            return Err("sourceIds must contain real source identities".to_string());
         }
         let excluded_sources = &request.filters.excluded_source_ids;
         if excluded_sources
@@ -409,13 +408,8 @@ impl SearchEngine {
         if excluded_sources.iter().collect::<HashSet<_>>().len() != excluded_sources.len() {
             return Err("excludedSourceIds must not contain duplicates".to_string());
         }
-        if request
-            .filters
-            .source_id
-            .as_ref()
-            .is_some_and(|source| excluded_sources.contains(source))
-        {
-            return Err("sourceId must not also be excluded".to_string());
+        if sources.iter().any(|source| excluded_sources.contains(source)) {
+            return Err("a source must not be both included and excluded".to_string());
         }
         for value in [
             request.filters.published_from.as_deref(),
@@ -442,11 +436,7 @@ impl SearchEngine {
 
     fn matches_filters(document: &DocumentMeta, request: &Query) -> bool {
         let filters = &request.filters;
-        if filters
-            .source_id
-            .as_deref()
-            .is_some_and(|source| document.source != source)
-        {
+        if !filters.source_ids.is_empty() && !filters.source_ids.contains(&document.source) {
             return false;
         }
         if filters.excluded_source_ids.contains(&document.source) {
@@ -730,6 +720,7 @@ impl SearchEngine {
         } else {
             None
         };
+        let highlights = |text: &str| highlight_ranges(text, &plan.query, &candidate.matched_terms);
         Ok(SearchResult {
             id: document.id.clone(),
             source: document.source.clone(),
@@ -741,12 +732,13 @@ impl SearchEngine {
             section: document.section.clone(),
             kind: document.kind,
             category: document.category.clone(),
-            snippet,
-            matched_terms: if with_snippet {
-                candidate.matched_terms.clone()
+            title_highlights: if with_snippet {
+                highlights(&document.title)
             } else {
                 Vec::new()
             },
+            snippet_highlights: snippet.as_deref().map(highlights).unwrap_or_default(),
+            snippet,
             attachments: if with_snippet {
                 document
                     .attachments
@@ -804,7 +796,7 @@ impl SearchEngine {
     pub fn search(&self, request: &Query) -> Result<SearchResponse, String> {
         let preparation = self.begin_query(request)?;
         let plan = self.plan_query(&preparation)?;
-        self.hydrate_results(&plan, 0, request.limit)
+        self.hydrate_results(&plan, request.offset, request.limit)
     }
 }
 

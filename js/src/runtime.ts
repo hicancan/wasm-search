@@ -246,12 +246,12 @@ export class SearchRuntime {
         onRanked(ranked);
 
         const contentChunks = JSON.parse(
-            engine.required_content_chunks(0, query.limit),
+            engine.required_content_chunks(query.offset ?? 0, query.limit),
         ) as number[];
         await this.loadContent(contentChunks, signal);
         signal?.throwIfAborted();
         try {
-            return JSON.parse(engine.hydrate_search(0, query.limit)) as SearchResponse;
+            return JSON.parse(engine.hydrate_search(query.offset ?? 0, query.limit)) as SearchResponse;
         } finally {
             engine.clear_content();
         }

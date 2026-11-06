@@ -126,7 +126,7 @@ fn staged_search_matches_core_including_filters_paging_and_content_reload() {
         // Same plan, larger page: no postings should be requested again.
         json!({"query":"transfer","limit":10,"filters":{"category":"notice"}}),
         json!({"query":"转专业","sort":"date_desc","filters":{"excludedSourceIds":["news"],"includeUndated":true}}),
-        json!({"query":"转专业","filters":{"sourceId":"news","publishedFrom":"2026-07-01","publishedTo":"2026-08-31"}}),
+        json!({"query":"转专业","filters":{"sourceIds":["news"],"publishedFrom":"2026-07-01","publishedTo":"2026-08-31"}}),
     ];
     for (index, request) in requests.iter().enumerate() {
         let lexicon_chunks = chunks(&android.begin_search(request.to_string()).unwrap());
@@ -198,7 +198,7 @@ fn errors_preserve_messages_through_one_uniffi_type() {
     }
     assert!(android.begin_search("not JSON".into()).is_err());
     assert!(android
-        .begin_search(r#"{"query":"transfer","filters":{"sourceId":"all"}}"#.into())
+        .begin_search(r#"{"query":"transfer","filters":{"sourceIds":["all"]}}"#.into())
         .unwrap_err()
         .to_string()
         .contains("real source"));

@@ -58,6 +58,7 @@ fn query(args: &[String]) -> Result<()> {
     let engine = load_engine(&PathBuf::from(required(args, "--bundle")?))?;
     let request = Query {
         query: required(args, "--query")?,
+        offset: 0,
         limit: option(args, "--limit")
             .and_then(|value| value.parse().ok())
             .unwrap_or(10),
