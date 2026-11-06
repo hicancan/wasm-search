@@ -5,7 +5,7 @@ use wasm_search_core::{ArtifactRef, BlockRef, Query, SearchEngine as CoreSearchE
 const DOCUMENTS: &str = r#"
 {"id":"a","source":"admissions","source_name":"Admissions","url":"https://example.test/a","title":"转专业通知","text":"转专业申请材料和办理流程","category":"notice","published":"2026-07-01","files":[{"name":"申请表.pdf","url":"https://example.test/a.pdf","ext":"pdf"}]}
 {"id":"b","source":"news","source_name":"News","url":"https://example.test/b","title":"转专业安排","text":"本年度转专业安排","category":"notice","published":"2026-08-01"}
-{"id":"c","source":"news","source_name":"News","url":"https://example.test/c","title":"校园活动","text":"其他校园新闻","category":"news"}
+{"id":"c","source":"news","source_name":"News","url":"https://example.test/c","title":"社区活动","text":"其他社区新闻","category":"news"}
 {"id":"d","source":"admissions","source_name":"Admissions","url":"https://example.test/d","title":"转专业指南","text":"转专业常见问题","category":"guide"}
 "#;
 const PROFILE: &str =

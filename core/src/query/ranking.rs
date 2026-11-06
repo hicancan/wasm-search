@@ -22,7 +22,7 @@ mod tests {
     #[test]
     fn exact_query_phrase_in_title_outranks_repeated_body_mentions() {
         let title = posting_score(
-            "校园网",
+            "社区网",
             Posting {
                 document: 0,
                 title_hits: 1,
@@ -33,7 +33,7 @@ mod tests {
             true,
         );
         let body = posting_score(
-            "校园网",
+            "社区网",
             Posting {
                 document: 1,
                 title_hits: 0,

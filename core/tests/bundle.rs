@@ -31,7 +31,7 @@ fn documents() -> Vec<IndexDocument> {
             source: "www".to_string(),
             source_name: "主页".to_string(),
             url: "https://example.test/b".to_string(),
-            title: "校园新闻".to_string(),
+            title: "社区新闻".to_string(),
             content: "学校新闻动态".to_string(),
             published_at: Some("2025-01-01".to_string()),
             updated_at: None,
@@ -809,7 +809,7 @@ fn an_empty_query_lists_what_the_filters_admit_newest_first() {
 
     let mut office = request("");
     office.filters.source_ids = vec!["office".to_string()];
-    assert_eq!(total(&bundle, &office), 1);
+    assert_eq!(total(&bundle, &office), 2);
 
     assert!(index_engine(&bundle).begin_query(&request("转")).is_err());
 }
@@ -817,14 +817,14 @@ fn an_empty_query_lists_what_the_filters_admit_newest_first() {
 #[test]
 fn within_finds_a_document_through_any_entity_that_contains_it() {
     let mut values = documents();
-    values[0].within = vec!["校区".to_string(), "校区/楼".to_string(), "校区/楼/教室".to_string()];
+    values[0].within = vec!["园区".to_string(), "园区/楼".to_string(), "园区/楼/房间".to_string()];
     let bundle = compile_search_bundle(values, Profile::default()).unwrap();
-    for (entity, expected) in [("校区/楼", 1), ("校区/楼/教室", 1), ("别处", 0)] {
+    for (entity, expected) in [("园区/楼", 1), ("园区/楼/房间", 1), ("别处", 0)] {
         let mut query = request("");
         query.filters.within = Some(entity.to_string());
         assert_eq!(total(&bundle, &query), expected, "{entity}");
     }
     let mut words = request("转专业");
-    words.filters.within = Some("校区".to_string());
+    words.filters.within = Some("园区".to_string());
     assert_eq!(total(&bundle, &words), 1);
 }
