@@ -1,11 +1,11 @@
 [workspace]
-members = ["core", "cli", "wasm", "android"]
+members = ["core", "cli", "wasm", "native"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 license = "AGPL-3.0-only"
-version = "4.2.1"
+version = "5.0.0"
 
 [workspace.dependencies]
 anyhow = "1"

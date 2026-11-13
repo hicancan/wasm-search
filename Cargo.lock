@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-search"
-version = "4.2.1"
+version = "5.0.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -866,17 +866,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm-search-android"
-version = "4.2.1"
-dependencies = [
- "serde_json",
- "uniffi",
- "wasm-search-core",
-]
-
-[[package]]
 name = "wasm-search-core"
-version = "4.2.1"
+version = "5.0.0"
 dependencies = [
  "pinyin",
  "ruzstd",
@@ -886,8 +877,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-search-native"
+version = "5.0.0"
+dependencies = [
+ "serde_json",
+ "uniffi",
+ "wasm-search-core",
+]
+
+[[package]]
 name = "wasm-search-wasm"
-version = "4.2.1"
+version = "5.0.0"
 dependencies = [
  "js-sys",
  "serde_json",

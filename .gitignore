@@ -1,5 +1,5 @@
 /target/
-/android/build/
+/native/build/
 node_modules/
 *.log
 .vscode/

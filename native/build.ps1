@@ -24,21 +24,29 @@ try {
     Push-Location (Split-Path -Parent $PSScriptRoot)
     try {
         & cargo ndk -t arm64-v8a -t x86_64 -P 21 -o $OutputDirectory build `
-            --locked --release --package wasm-search-android --lib
+            --locked --release --package wasm-search-native --lib
         if ($LASTEXITCODE -ne 0) {
             throw "Android library build failed (exit $LASTEXITCODE)"
         }
 
         # Generate on the host from the metadata embedded in the Android library.
         # uniffi.toml is discovered through Cargo metadata, including the package name.
-        $library = Join-Path $OutputDirectory 'arm64-v8a/libwasm_search_android.so'
-        & cargo run --locked --release --package wasm-search-android `
+        $library = Join-Path $OutputDirectory 'arm64-v8a/libwasm_search_native.so'
+        & cargo run --locked --release --package wasm-search-native `
             --features bindgen --bin uniffi-bindgen -- generate $library `
             --language kotlin --out-dir $kotlinDirectory --no-format
         if ($LASTEXITCODE -ne 0) {
             throw "Kotlin binding generation failed (exit $LASTEXITCODE)"
         }
 
+        # The same library for Windows, which the Windows client binds from C#.
+        & 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1' -Arch amd64 -HostArch amd64 -SkipAutomaticLocation | Out-Null
+        & cargo build --locked --release --package wasm-search-native --lib --target x86_64-pc-windows-msvc
+        if ($LASTEXITCODE -ne 0) { throw "Windows library build failed (exit $LASTEXITCODE)" }
+        $windowsDirectory = Join-Path $PSScriptRoot 'build/windows'
+        New-Item -ItemType Directory -Force $windowsDirectory | Out-Null
+        Copy-Item -LiteralPath (Join-Path (Get-Location) 'target/x86_64-pc-windows-msvc/release/wasm_search_native.dll') -Destination $windowsDirectory -Force
+        Write-Host "Windows library: $windowsDirectory"
         Write-Host "Android libraries: $OutputDirectory"
         Write-Host "Kotlin bindings: $kotlinDirectory"
     }

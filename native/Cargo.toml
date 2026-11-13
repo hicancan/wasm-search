@@ -1,5 +1,5 @@
 [package]
-name = "wasm-search-android"
+name = "wasm-search-native"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

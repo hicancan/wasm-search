@@ -8,13 +8,13 @@ uniffi::setup_scaffolding!();
 #[derive(Debug, uniffi::Error)]
 #[uniffi(flat_error)]
 pub enum SearchError {
-    Message { message: String },
+    Failed { reason: String },
 }
 
 impl std::fmt::Display for SearchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Message { message } => formatter.write_str(message),
+            Self::Failed { reason } => formatter.write_str(reason),
         }
     }
 }
@@ -22,8 +22,8 @@ impl std::fmt::Display for SearchError {
 impl std::error::Error for SearchError {}
 
 fn error(error: impl ToString) -> SearchError {
-    SearchError::Message {
-        message: error.to_string(),
+    SearchError::Failed {
+        reason: error.to_string(),
     }
 }
 
