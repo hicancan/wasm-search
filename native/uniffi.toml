@@ -1,3 +1,2 @@
 [bindings.kotlin]
 package_name = "top.hicancan.search"
-cdylib_name = "wasm_search_android"
