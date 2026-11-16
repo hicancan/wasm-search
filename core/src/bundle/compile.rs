@@ -297,7 +297,9 @@ pub fn compile_search_bundle_with(
         list.sort();
         list.dedup();
     }
-    let mut url_uses: HashMap<&str, u32> = HashMap::new();
+    // Group numbers are serialized into the index. Assign them in URL order,
+    // so separate builds of the same documents produce the same byte ranges.
+    let mut url_uses: BTreeMap<&str, u32> = BTreeMap::new();
     for document in &metas {
         *url_uses.entry(document.url.as_str()).or_default() += 1;
     }

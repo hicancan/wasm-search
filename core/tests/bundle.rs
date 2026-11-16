@@ -61,6 +61,24 @@ fn documents() -> Vec<IndexDocument> {
     ]
 }
 
+#[test]
+fn repeated_urls_compile_to_identical_packs() {
+    let mut values = Vec::new();
+    for group in 0..160 {
+        for copy in 0..2 {
+            let mut document = documents().remove(0);
+            document.id = format!("{group}-{copy}");
+            document.url = format!("https://example.test/{group:03}");
+            values.push(document);
+        }
+    }
+    let first = compile_search_bundle(values.clone(), Profile::default()).expect("first bundle");
+    for _ in 0..3 {
+        let next = compile_search_bundle(values.clone(), Profile::default()).expect("next bundle");
+        assert_eq!(first.packs, next.packs);
+    }
+}
+
 fn categorized(mut values: Vec<IndexDocument>) -> Vec<IndexDocument> {
     for value in &mut values {
         value.category = Some(
