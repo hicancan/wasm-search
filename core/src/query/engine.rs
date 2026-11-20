@@ -18,6 +18,8 @@ const MAX_QUERY_LIMIT: usize = 1_000;
 pub struct SearchEngine {
     profile: Profile,
     sources: Vec<String>,
+    /// By source position: whether the profile names it quiet.
+    quiet: Vec<bool>,
     categories: Vec<String>,
     dates: Vec<String>,
     entities: Vec<String>,
@@ -138,8 +140,10 @@ impl SearchEngine {
     pub fn new(index: &[u8], index_bytes: u64, profile: Profile) -> Result<Self, String> {
         let BundleIndex { sources, categories, dates, entities, rows, page_starts, filter_options, postings_firsts, tables } =
             decode_index(&decompress_artifact(index, index_bytes)?)?;
+        let quiet = sources.iter().map(|source| profile.quiet_sources.contains(source)).collect();
         Ok(Self {
             profile,
+            quiet,
             sources,
             categories,
             dates,
@@ -544,6 +548,10 @@ impl SearchEngine {
         QueryPlan { query: String::new(), total_candidates: ranked.len(), ranked }
     }
 
+    fn is_quiet(&self, document: u32) -> bool {
+        self.quiet[self.rows[document as usize].source as usize]
+    }
+
     fn order(&self, ranked: &mut [RankedCandidate], sort: SortMode, query_chars: usize) {
         match sort {
             SortMode::Relevance => ranked.sort_by(|left, right| {
@@ -552,6 +560,7 @@ impl SearchEngine {
                     .relevance_band(right.title_chars, query_chars)
                     .cmp(&left.tier.relevance_band(left.title_chars, query_chars))
                     .then_with(|| right.source_fit.cmp(&left.source_fit))
+                    .then_with(|| self.is_quiet(left.document).cmp(&self.is_quiet(right.document)))
                     .then_with(|| {
                         self.rows[right.document as usize].date.cmp(&self.rows[left.document as usize].date)
                     })
@@ -561,6 +570,7 @@ impl SearchEngine {
             }),
             SortMode::DateDesc => ranked.sort_by(|left, right| {
                 self.rows[right.document as usize].date.cmp(&self.rows[left.document as usize].date)
+                    .then_with(|| self.is_quiet(left.document).cmp(&self.is_quiet(right.document)))
                     .then_with(|| right.tier.cmp(&left.tier))
                     .then_with(|| right.score.total_cmp(&left.score))
                     .then_with(|| left.document.cmp(&right.document))

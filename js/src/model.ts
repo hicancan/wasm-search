@@ -74,6 +74,8 @@ export interface Alias {
 
 export interface Profile {
     aliases: Alias[];
+    /** Sources that publish many small items: after the rest within a relevance band, or a day when browsing. */
+    quiet_sources?: string[];
 }
 
 /** One line of documents.jsonl. */

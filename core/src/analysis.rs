@@ -109,10 +109,8 @@ fn analyzed_tokens(value: &str, max_cjk_n: usize) -> Vec<String> {
     }
     flush_ascii(&mut ascii, &mut tokens);
     flush_cjk(&mut cjk, max_cjk_n, &mut tokens);
-    if normalized.chars().count() >= 2 && normalized.chars().count() <= 32 {
-        if !tokens.iter().any(|token| token == &normalized) {
-            tokens.push(normalized);
-        }
+    if normalized.chars().count() >= 2 && normalized.chars().count() <= 32 && !tokens.iter().any(|token| token == &normalized) {
+        tokens.push(normalized);
     }
     tokens
 }
@@ -233,6 +231,7 @@ mod tests {
                 phrases: vec!["大学生创新创业训练计划".to_string()],
                 prefer_sources: vec!["cxcy".to_string()],
             }],
+            ..Profile::default()
         };
         let analysis = analyze_search_query("大创", &profile);
         assert_eq!(analysis.preferred_sources, vec!["cxcy".to_string()]);

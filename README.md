@@ -81,6 +81,10 @@ reload, reads nothing again. A server that ignores range requests still works, a
 the cost of whole packs. Hosts drive this through the engine: `beginSearch` names
 the postings blocks, `planSearch` the pages, and `hydrateSearch` returns the results.
 
+A profile may name `quiet_sources`: sources that publish many small items, such as job
+posts. They are still found, but within one relevance band, or one day when browsing by
+date, they come after everything else, so they never crowd a page.
+
 ## Pinyin
 
 Bundle compilation uses a generic, plain-syllable character dictionary to add

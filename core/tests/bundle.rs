@@ -236,6 +236,37 @@ fn a_title_that_is_the_transliterated_query_outranks_newer_titles_that_mention_i
 }
 
 #[test]
+fn quiet_sources_come_after_the_rest_within_a_band_and_within_a_day() {
+    let item = |id: &str, source: &str, title: &str, date: &str| IndexDocument {
+        id: id.to_string(),
+        source: source.to_string(),
+        title: title.to_string(),
+        published_at: Some(date.to_string()),
+        url: format!("https://example.test/{id}"),
+        ..documents()[1].clone()
+    };
+    let profile = Profile { quiet_sources: vec!["jobs".to_string()], ..Profile::default() };
+    let bundle = compile_search_bundle(
+        categorized(vec![
+            item("job-1", "jobs", "开发工程师招聘", "2026-11-20"),
+            item("job-2", "jobs", "测试工程师招聘", "2026-11-20"),
+            item("notice", "office", "工程训练中心开放通知", "2026-11-20"),
+            item("older", "office", "工程实践周安排", "2026-11-19"),
+        ]),
+        profile,
+    )
+    .expect("compile");
+    let browse = |query: &str| {
+        let (engine, plan) = lazy_page(&bundle, &request(query));
+        engine.hydrate_results(&plan, 0, 10).expect("results").results.into_iter().map(|result| result.id).collect::<Vec<_>>()
+    };
+    let newest = browse("");
+    assert_eq!(newest[0], "notice");
+    assert_eq!(newest.last().map(String::as_str), Some("older"));
+    assert_eq!(browse("工程")[0], "notice");
+}
+
+#[test]
 fn compiles_and_queries_the_current_bundle_contract() {
     let bundle =
         compile_search_bundle(categorized(documents()), Profile::default()).expect("compile");
