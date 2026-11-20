@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-search"
-version = "5.0.2"
+version = "6.0.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -867,7 +867,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-search-core"
-version = "5.0.2"
+version = "6.0.0"
 dependencies = [
  "pinyin",
  "ruzstd",
@@ -878,7 +878,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-search-native"
-version = "5.0.2"
+version = "6.0.0"
 dependencies = [
  "serde_json",
  "uniffi",
@@ -887,7 +887,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-search-wasm"
-version = "5.0.2"
+version = "6.0.0"
 dependencies = [
  "js-sys",
  "serde_json",
