@@ -177,3 +177,9 @@ fn pinyin_uses_the_same_compiled_postings_through_android() {
         assert!(!hydrated.to_string().contains("py:"));
     }
 }
+
+#[test]
+fn names_the_bundle_format_it_reads() {
+    let manifest = value(&compile(DOCUMENTS.into(), PROFILE.into()).unwrap().manifest_json().unwrap());
+    assert_eq!(manifest["format"], bundle_format());
+}

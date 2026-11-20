@@ -141,7 +141,10 @@ pub fn compile_search_bundle_with(
 
     let mut postings_by_term: BTreeMap<String, Vec<Posting>> = BTreeMap::new();
     for (document_index, document) in documents.iter().enumerate() {
-        let title_terms = term_counts(&document.title, 4);
+        let mut title_terms = term_counts(&document.title, 4);
+        for term in crate::pinyin::whole_terms(&document.title) {
+            title_terms.insert(term, 1);
+        }
         let searchable_body = format!(
             "{} {} {} {}",
             document.content,

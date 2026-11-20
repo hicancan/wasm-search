@@ -43,6 +43,7 @@ enum MatchTier {
     AllTitleTerms,
     TitleContains,
     TitleStartsWith,
+    PinyinTitleEquals,
     TitleEquals,
 }
 
@@ -52,7 +53,8 @@ impl MatchTier {
     /// mention it, however recent.
     fn relevance_band(self, title_chars: usize, query_chars: usize) -> u8 {
         match self {
-            Self::TitleEquals => 7,
+            Self::TitleEquals => 8,
+            Self::PinyinTitleEquals => 7,
             Self::TitleStartsWith | Self::TitleContains if query_chars * 2 >= title_chars => 6,
             Self::TitleStartsWith | Self::TitleContains => 5,
             Self::AllTitleTerms => 4,
@@ -391,9 +393,16 @@ impl SearchEngine {
             .max()
             .unwrap_or(MatchTier::Partial);
 
-        // Transliteration is a fallback below literal Chinese/Latin title
-        // matches, independent of publication date and repetition counts.
+        // A title that is the query, transliterated, names what was looked
+        // for. Other transliteration is a fallback below literal Chinese/Latin
+        // title matches, independent of publication date and repetition counts.
         if state
+            .title_terms
+            .iter()
+            .any(|term| term.starts_with(crate::pinyin::WHOLE))
+        {
+            tier = tier.max(MatchTier::PinyinTitleEquals);
+        } else if state
             .title_terms
             .iter()
             .any(|term| term.starts_with(crate::pinyin::PREFIX))

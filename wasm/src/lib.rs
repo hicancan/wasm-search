@@ -7,6 +7,12 @@ fn js_error(error: impl ToString) -> JsValue {
     JsValue::from_str(&error.to_string())
 }
 
+/// The one bundle format this engine reads.
+#[wasm_bindgen]
+pub fn bundle_format() -> String {
+    wasm_search_core::SEARCH_BUNDLE_FORMAT.to_string()
+}
+
 #[wasm_bindgen]
 pub struct SearchEngine {
     inner: SearchSession,

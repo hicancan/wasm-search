@@ -159,6 +159,9 @@ pub(crate) fn analyze_search_query(value: &str, profile: &Profile) -> QueryAnaly
     if let Some(term) = crate::pinyin::query_term(&normalized) {
         retrieval_terms.push(term);
     }
+    if let Some(term) = crate::pinyin::whole_query_term(&normalized) {
+        retrieval_terms.push(term);
+    }
     for phrase in &phrases {
         retrieval_terms.extend(coverage_terms(phrase, 4));
     }

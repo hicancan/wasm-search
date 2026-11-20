@@ -13,8 +13,11 @@ export interface BlockRef extends ArtifactRef {
     id: number;
 }
 
+/** The one bundle format this package reads: a host compares it with the format a data release names. */
+export const SEARCH_BUNDLE_FORMAT = 'wasm-search-bundle-v5';
+
 export interface SearchBundleManifest {
-    format: 'wasm-search-bundle-v5';
+    format: typeof SEARCH_BUNDLE_FORMAT;
     index: ArtifactRef;
     packs: string[];
     /** Faster addresses for the packs, by position; `packs` remains the fallback. */
@@ -24,7 +27,7 @@ export interface SearchBundleManifest {
 
 function parseManifest(value: unknown): SearchBundleManifest {
     const manifest = value as Partial<SearchBundleManifest> | null;
-    if (!manifest || manifest.format !== 'wasm-search-bundle-v5') {
+    if (!manifest || manifest.format !== SEARCH_BUNDLE_FORMAT) {
         throw new Error('unsupported search bundle format');
     }
     if (!manifest.index || !manifest.packs?.length) {

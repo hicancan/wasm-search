@@ -210,6 +210,32 @@ fn presentation_identity(result: &wasm_search_core::SearchResult) -> String {
 }
 
 #[test]
+fn a_title_that_is_the_transliterated_query_outranks_newer_titles_that_mention_it() {
+    let named = |id: &str, title: &str, date: &str| IndexDocument {
+        id: id.to_string(),
+        title: title.to_string(),
+        published_at: Some(date.to_string()),
+        url: format!("https://example.test/{id}"),
+        ..documents()[1].clone()
+    };
+    let bundle = compile_search_bundle(
+        categorized(vec![
+            named("place", "图书馆", "2020-01-01"),
+            named("notice", "图书馆举办读书分享会", "2026-09-01"),
+            named("news", "图书馆开放时间调整", "2026-10-01"),
+        ]),
+        Profile::default(),
+    )
+    .expect("compile");
+    for query in ["tsg", "tushuguan", "tu shu guan", "图书馆"] {
+        let (engine, plan) = lazy_page(&bundle, &request(query));
+        let response = engine.hydrate_results(&plan, 0, 10).expect("results");
+        assert_eq!(response.results[0].id, "place", "{query}");
+        assert_eq!(response.total_candidates, 3, "{query}");
+    }
+}
+
+#[test]
 fn compiles_and_queries_the_current_bundle_contract() {
     let bundle =
         compile_search_bundle(categorized(documents()), Profile::default()).expect("compile");

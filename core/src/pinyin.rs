@@ -5,6 +5,10 @@ use pinyin::ToPinyin;
 use std::collections::BTreeSet;
 
 pub(crate) const PREFIX: &str = "\u{1f}py:";
+/// A transliteration of a whole title. Window terms say a title contains the
+/// query; this says the title *is* the query, as a literal equal title does,
+/// so `tsg` finds the place 图书馆 above every notice that mentions it.
+pub(crate) const WHOLE: &str = "\u{1f}py:=";
 
 /// Plain syllables may be typed together or separated by whitespace. Keep this
 /// separate from normal text analysis so Latin phrases retain their semantics.
@@ -16,6 +20,43 @@ pub(crate) fn query_term(value: &str) -> Option<String> {
         .collect();
     (compact.len() >= 2 && compact.chars().all(|c| c.is_ascii_alphanumeric()))
         .then(|| format!("{PREFIX}{compact}"))
+}
+
+/// The whole-title term a query would match, beside its window term.
+pub(crate) fn whole_query_term(value: &str) -> Option<String> {
+    query_term(value).map(|term| format!("{WHOLE}{}", &term[PREFIX.len()..]))
+}
+
+/// Full and initial transliterations of a title that is one unbroken name of at
+/// most 32 characters, holding at least one Chinese character.
+pub(crate) fn whole_terms(title: &str) -> Vec<String> {
+    let normalized = normalize_text(title);
+    let characters: Vec<char> = normalized.chars().collect();
+    if characters.is_empty() || characters.len() > 32 {
+        return Vec::new();
+    }
+    let (mut full, mut initials, mut han) = (String::new(), String::new(), false);
+    for character in characters {
+        if let Some(pronunciation) = character.to_pinyin() {
+            let plain = pronunciation.plain().replace('ü', "v");
+            initials.push_str(&plain[..1]);
+            full.push_str(&plain);
+            han = true;
+        } else if character.is_ascii_alphanumeric() {
+            full.push(character);
+            initials.push(character);
+        } else {
+            return Vec::new();
+        }
+    }
+    if !han {
+        return Vec::new();
+    }
+    let mut terms = vec![format!("{WHOLE}{full}")];
+    if initials != full {
+        terms.push(format!("{WHOLE}{initials}"));
+    }
+    terms
 }
 
 pub(crate) fn document_terms(value: &str, max_n: usize) -> Vec<String> {
@@ -86,5 +127,15 @@ mod tests {
         assert_eq!(query_term("图书馆"), None);
         assert_eq!(query_term("LÜ GUAN"), Some(format!("{PREFIX}lvguan")));
         assert!(document_terms("旅馆", 4).contains(&format!("{PREFIX}lvguan")));
+    }
+
+    #[test]
+    fn whole_terms_name_only_an_unbroken_title() {
+        assert_eq!(whole_terms("图书馆"), [format!("{WHOLE}tushuguan"), format!("{WHOLE}tsg")]);
+        assert_eq!(whole_terms("教3"), [format!("{WHOLE}jiao3"), format!("{WHOLE}j3")]);
+        assert!(whole_terms("图书馆 开放时间").is_empty());
+        assert!(whole_terms("教1-101").is_empty());
+        assert!(whole_terms("library").is_empty());
+        assert_eq!(whole_query_term("T S G"), Some(format!("{WHOLE}tsg")));
     }
 }

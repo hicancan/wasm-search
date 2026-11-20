@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { zstdCompressSync } from 'node:zlib';
 import { beforeAll, expect, it } from 'vitest';
-import initialize, { compile, SearchEngine } from '../wasm/wasm_search_wasm.js';
+import initialize, { bundle_format, compile, SearchEngine } from '../wasm/wasm_search_wasm.js';
+import { SEARCH_BUNDLE_FORMAT } from './artifacts.js';
 
 beforeAll(async () => {
     await initialize({ module_or_path: await readFile(new URL('../wasm/wasm_search_wasm_bg.wasm', import.meta.url)) });
@@ -32,4 +33,10 @@ it('compiles pinyin once and searches full, spaced, initial and mixed digit quer
         engine.free();
         bundle.free();
     }
+});
+
+it('names the bundle format the engine reads and the compiler writes', () => {
+    expect(bundle_format()).toBe(SEARCH_BUNDLE_FORMAT);
+    const bundle = compile(JSON.stringify({ id: 'a', title: '图书馆', source: 'places', source_name: 'Places', url: 'https://example.test/a', text: '' }), '{}', (bytes: Uint8Array) => bytes);
+    try { expect(JSON.parse(bundle.manifest_json()).format).toBe(SEARCH_BUNDLE_FORMAT); } finally { bundle.free(); }
 });

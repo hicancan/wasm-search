@@ -107,6 +107,13 @@ impl Bundle {
     }
 }
 
+/// The one bundle format this engine reads. A host compares it with the format a
+/// data release names, and asks for a newer app when they differ.
+#[uniffi::export]
+pub fn bundle_format() -> String {
+    wasm_search_core::SEARCH_BUNDLE_FORMAT.to_string()
+}
+
 #[uniffi::export]
 pub fn compile(documents_jsonl: String, profile_json: String) -> Result<Bundle, SearchError> {
     let documents = documents_jsonl

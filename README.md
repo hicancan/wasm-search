@@ -63,7 +63,10 @@ ranges counted in Unicode scalar values, so every client marks the same characte
 without analysing text itself.
 
 Bundles are immutable: serve each build from its own directory and cache it
-forever.
+forever. `SEARCH_BUNDLE_FORMAT` (and `bundleFormat()` in the native and wasm
+bindings) names the one format an engine reads, as each bundle's manifest names
+the format it was written in: a host that publishes the latter beside its data
+can tell an app too old for that data to update rather than fail.
 
 Bundle format v5 has one index and a few pack files. The index is the only read a
 client makes before its first query: it holds what ranking needs for every document
@@ -83,8 +86,11 @@ the postings blocks, `planSearch` the pages, and `hydrateSearch` returns the res
 Bundle compilation uses a generic, plain-syllable character dictionary to add
 full pinyin and initials to the inverted index. For example, `图书馆` matches
 `tushuguan`, `tu shu guan` and `tsg`; `教3` matches `jiao3` and `j3`.
-Queries are case insensitive, and `ü` can also be entered as `v`. Literal title matches retain higher relevance
-than transliterations, and snippets never expose internal transliteration terms.
+Queries are case insensitive, and `ü` can also be entered as `v`. A title whose
+whole transliteration is the query (`tsg` for the place `图书馆`) ranks just below
+a literal equal title and above titles that merely contain the query; other
+transliterations rank below literal title matches. Snippets never expose internal
+transliteration terms.
 No corpus aliases or client-side title scans are required; both WASM and Android
 consume the same compiled postings. Recompile existing bundles to enable pinyin.
 
