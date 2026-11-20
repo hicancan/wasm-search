@@ -1,7 +1,7 @@
 use crate::profile::Profile;
 use serde::{Deserialize, Serialize};
 
-pub const SEARCH_BUNDLE_FORMAT: &str = "wasm-search-bundle-v4";
+pub const SEARCH_BUNDLE_FORMAT: &str = "wasm-search-bundle-v5";
 
 /// A byte range of a pack file, compressed on its own.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,13 +50,13 @@ pub struct SearchBundleManifest {
     pub profile: Profile,
 }
 
-/// Every block's place in the packs, in the order they are written.
+/// Every block's place in the packs, in the order they are written. A query reads postings,
+/// ranks from the index, then reads the pages of the results it shows: two rounds, whatever
+/// the corpus. Pages hold each document's metadata and text together, in document order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BlockTables {
-    pub lexicon: Vec<ArtifactRef>,
     pub postings: Vec<ArtifactRef>,
-    pub documents: Vec<ArtifactRef>,
-    pub content: Vec<ArtifactRef>,
+    pub pages: Vec<ArtifactRef>,
 }
 
 #[derive(Clone, Debug)]
@@ -65,7 +65,7 @@ pub struct CompiledBundle {
     pub packs: Vec<Vec<u8>>,
     pub tables: BlockTables,
     pub document_count: u32,
-    pub lexicon_terms: usize,
+    pub terms: usize,
 }
 
 impl CompiledBundle {

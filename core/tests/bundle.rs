@@ -102,39 +102,29 @@ fn index_engine(bundle: &CompiledBundle) -> SearchEngine {
     .expect("index")
 }
 
-/// Loads only what a real client would fetch for one page of a query.
+/// Loads only what a real client would fetch for one page of a query: postings, then pages.
 fn lazy_page(bundle: &CompiledBundle, query: &Query) -> (SearchEngine, QueryPlan) {
     let mut lazy = index_engine(bundle);
     let preparation = lazy.begin_query(query).expect("analysis");
-    for block in lazy.required_lexicon_blocks(&preparation) {
-        let artifact = bundle.tables.lexicon[block.id as usize];
-        lazy.load_lexicon_block(block.id, bundle.read(artifact), block.decoded_bytes).expect("lexicon");
-    }
     for block in lazy.required_posting_chunks(&preparation) {
         let artifact = bundle.tables.postings[block.id as usize];
         lazy.load_postings_chunk(block.id, bundle.read(artifact), block.decoded_bytes).expect("postings");
     }
     let plan = lazy.plan_query(&preparation).expect("plan");
-    for block in lazy.required_document_blocks(&plan, query.offset, query.limit) {
-        let artifact = bundle.tables.documents[block.id as usize];
-        lazy.load_document_block(block.id, bundle.read(artifact), block.decoded_bytes).expect("document");
+    for block in lazy.required_pages(&plan, query.offset, query.limit) {
+        let artifact = bundle.tables.pages[block.id as usize];
+        lazy.load_page(block.id, bundle.read(artifact), block.decoded_bytes).expect("page");
     }
     (lazy, plan)
 }
 
 fn engine(bundle: &CompiledBundle) -> SearchEngine {
     let mut engine = index_engine(bundle);
-    for (index, reference) in bundle.tables.lexicon.iter().enumerate() {
-        engine.load_lexicon_block(index as u32, bundle.read(*reference), reference.decoded_bytes).expect("lexicon");
-    }
-    for (index, reference) in bundle.tables.documents.iter().enumerate() {
-        engine.load_document_block(index as u32, bundle.read(*reference), reference.decoded_bytes).expect("documents");
-    }
     for (index, reference) in bundle.tables.postings.iter().enumerate() {
         engine.load_postings_chunk(index as u32, bundle.read(*reference), reference.decoded_bytes).expect("postings");
     }
-    for (index, reference) in bundle.tables.content.iter().enumerate() {
-        engine.load_content_chunk(index as u32, bundle.read(*reference), reference.decoded_bytes).expect("content");
+    for (index, reference) in bundle.tables.pages.iter().enumerate() {
+        engine.load_page(index as u32, bundle.read(*reference), reference.decoded_bytes).expect("page");
     }
     engine
 }
@@ -239,7 +229,7 @@ fn compiles_and_queries_the_current_bundle_contract() {
 }
 
 #[test]
-fn lazy_lexicon_preserves_top_k_order_for_fixed_queries() {
+fn two_rounds_preserve_top_k_order_for_fixed_queries() {
     let bundle =
         compile_search_bundle(categorized(documents()), Profile::default()).expect("compile");
     let eager = engine(&bundle);
@@ -255,7 +245,7 @@ fn lazy_lexicon_preserves_top_k_order_for_fixed_queries() {
 
         let (lazy, plan) = lazy_page(&bundle, &query);
         let actual = lazy
-            .result_shells(&plan, 0, query.limit)
+            .hydrate_results(&plan, 0, query.limit)
             .expect("lazy shells")
             .results
             .into_iter()
@@ -266,7 +256,7 @@ fn lazy_lexicon_preserves_top_k_order_for_fixed_queries() {
 }
 
 #[test]
-fn filtered_and_date_queries_match_with_only_page_document_blocks() {
+fn filtered_and_date_queries_match_with_only_the_pages_shown() {
     let documents = (0..20)
         .map(|index| {
             let mut document = documents()[1].clone();
@@ -281,13 +271,13 @@ fn filtered_and_date_queries_match_with_only_page_document_blocks() {
             document.content = String::new();
             document.category = Some(if index == 8 { "exam" } else { "notice" }.into());
             document.published_at = Some(format!("2026-07-{:02}", index + 1));
-            // Exercise separate metadata blocks without adding searchable filler.
+            // Spread the documents over several pages without adding searchable filler.
             document.section = Some("x".repeat(9000));
             document
         })
         .collect();
     let bundle = compile_search_bundle(documents, Profile::default()).expect("compile");
-    assert!(bundle.tables.documents.len() > 3);
+    assert!(bundle.tables.pages.len() > 3);
     let eager = engine(&bundle);
     for filters in [
         serde_json::json!({"sourceIds":["office"]}),
@@ -310,7 +300,7 @@ fn filtered_and_date_queries_match_with_only_page_document_blocks() {
             };
             let expected = eager.search(&query).expect("eager");
             let (lazy, plan) = lazy_page(&bundle, &query);
-            let actual = lazy.result_shells(&plan, 0, query.limit).expect("results");
+            let actual = lazy.hydrate_results(&plan, 0, query.limit).expect("results");
             assert_eq!(
                 actual.total_candidates, expected.total_candidates,
                 "{query:?}"
@@ -355,45 +345,18 @@ fn filter_options_keep_category_counts_scoped_to_each_source() {
 }
 
 #[test]
-fn one_query_plan_keeps_exact_order_while_snippets_are_hydrated() {
+fn two_rounds_return_the_same_results_with_snippets_as_a_fully_loaded_engine() {
     let bundle =
         compile_search_bundle(categorized(documents()), Profile::default()).expect("compile");
-    let mut engine = engine(&bundle);
-    let request = Query {
-        query: "转专业".to_string(),
-        offset: 0,
-        limit: 10,
-        sort: Default::default(),
-        filters: Default::default(),
-    };
-    let preparation = engine.begin_query(&request).expect("analysis");
-    let plan = engine.plan_query(&preparation).expect("ranking");
-    let shells = engine.result_shells(&plan, 0, 10).expect("shells");
-    assert!(shells.results.iter().all(|result| result.snippet.is_none()));
-
-    engine.clear_content();
-    let chunks = engine.required_content_chunks(&plan, 0, 10);
-    for chunk in chunks {
-        let artifact = bundle.tables.content[chunk.id as usize];
-        engine.load_content_chunk(chunk.id, bundle.read(artifact), chunk.decoded_bytes).expect("content");
-    }
-    let hydrated = engine.hydrate_results(&plan, 0, 10).expect("hydrated");
+    let query = request("转专业");
+    let eager = engine(&bundle).search(&query).expect("eager");
+    let (lazy, plan) = lazy_page(&bundle, &query);
+    let hydrated = lazy.hydrate_results(&plan, 0, query.limit).expect("hydrated");
     assert_eq!(
-        shells
-            .results
-            .iter()
-            .map(|result| &result.id)
-            .collect::<Vec<_>>(),
-        hydrated
-            .results
-            .iter()
-            .map(|result| &result.id)
-            .collect::<Vec<_>>()
+        eager.results.iter().map(|result| (&result.id, &result.snippet)).collect::<Vec<_>>(),
+        hydrated.results.iter().map(|result| (&result.id, &result.snippet)).collect::<Vec<_>>()
     );
-    assert!(hydrated
-        .results
-        .iter()
-        .all(|result| result.snippet.is_some()));
+    assert!(hydrated.results.iter().all(|result| result.snippet.is_some()));
 }
 
 #[test]
@@ -811,14 +774,14 @@ fn a_title_that_names_the_query_outranks_newer_titles_that_mention_it() {
 
 fn total(bundle: &CompiledBundle, query: &Query) -> usize {
     let (lazy, plan) = lazy_page(bundle, query);
-    lazy.result_shells(&plan, 0, 1).unwrap().total_candidates
+    lazy.hydrate_results(&plan, 0, 1).unwrap().total_candidates
 }
 
 #[test]
 fn an_empty_query_lists_what_the_filters_admit_newest_first() {
     let bundle = compile_search_bundle(documents(), Profile::default()).unwrap();
     let (lazy, plan) = lazy_page(&bundle, &request(""));
-    let results = lazy.result_shells(&plan, 0, 100).unwrap().results;
+    let results = lazy.hydrate_results(&plan, 0, 100).unwrap().results;
     assert!(results.len() > 1);
     let dated: Vec<_> = results.iter().filter_map(|result| result.published_at.clone()).collect();
     let mut sorted = dated.clone();

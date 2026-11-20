@@ -5,8 +5,8 @@ use super::ranking::posting_score;
 use super::snippet::{build_snippet, highlight_ranges};
 use crate::analysis::{analyze_search_query, normalize_text, QueryAnalysis};
 use crate::bundle::{
-    decode_content, decode_document_block, decode_index, decode_lexicon_block, decode_postings,
-    decompress_artifact, ArtifactRef, BlockRef, BlockTables, BundleIndex, RankRow,
+    decode_index, decode_page, decode_postings, decompress_artifact, ArtifactRef, BlockRef,
+    BlockTables, BundleIndex, RankRow,
 };
 use crate::document::{DocumentKind, DocumentMeta, Posting};
 use crate::profile::Profile;
@@ -24,16 +24,13 @@ pub struct SearchEngine {
     rows: Vec<RankRow>,
     tables: BlockTables,
     documents: HashMap<u32, DocumentMeta>,
-    document_block_starts: Vec<u32>,
-    loaded_document_blocks: BTreeSet<u32>,
+    content: HashMap<u32, String>,
+    page_starts: Vec<u32>,
+    loaded_pages: BTreeSet<u32>,
     filter_options: FilterOptions,
-    lexicon_firsts: Vec<String>,
-    lexicon: HashMap<String, u32>,
-    loaded_lexicon_blocks: BTreeSet<u32>,
+    postings_firsts: Vec<String>,
     postings: HashMap<String, Vec<Posting>>,
     loaded_posting_chunks: BTreeSet<u32>,
-    content: HashMap<u32, String>,
-    loaded_content_chunks: BTreeSet<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -137,7 +134,7 @@ pub struct QueryPreparation {
 
 impl SearchEngine {
     pub fn new(index: &[u8], index_bytes: u64, profile: Profile) -> Result<Self, String> {
-        let BundleIndex { sources, categories, dates, entities, rows, block_starts, filter_options, lexicon_firsts, tables } =
+        let BundleIndex { sources, categories, dates, entities, rows, page_starts, filter_options, postings_firsts, tables } =
             decode_index(&decompress_artifact(index, index_bytes)?)?;
         Ok(Self {
             profile,
@@ -148,16 +145,13 @@ impl SearchEngine {
             rows,
             tables,
             documents: HashMap::new(),
-            document_block_starts: block_starts,
-            loaded_document_blocks: BTreeSet::new(),
+            content: HashMap::new(),
+            page_starts,
+            loaded_pages: BTreeSet::new(),
             filter_options,
-            lexicon_firsts,
-            lexicon: HashMap::new(),
-            loaded_lexicon_blocks: BTreeSet::new(),
+            postings_firsts,
             postings: HashMap::new(),
             loaded_posting_chunks: BTreeSet::new(),
-            content: HashMap::new(),
-            loaded_content_chunks: BTreeSet::new(),
         })
     }
 
@@ -169,45 +163,23 @@ impl SearchEngine {
         &self.tables
     }
 
-    pub fn load_document_block(
-        &mut self,
-        block: u32,
-        bytes: &[u8],
-        decoded_bytes: u64,
-    ) -> Result<(), String> {
-        if self.document_block_starts.get(block as usize).is_none() {
-            return Err(format!("document block does not exist: {block}"));
+    pub fn load_page(&mut self, page: u32, bytes: &[u8], decoded_bytes: u64) -> Result<(), String> {
+        let Some(&expected) = self.page_starts.get(page as usize) else {
+            return Err(format!("page does not exist: {page}"));
+        };
+        let (start, documents) = decode_page(&decompress_artifact(bytes, decoded_bytes)?)?;
+        if start != expected {
+            return Err(format!("page start does not match page {page}"));
         }
-        let (start, documents) =
-            decode_document_block(&decompress_artifact(bytes, decoded_bytes)?)?;
-        if self.document_block_starts.get(block as usize).copied() != Some(start) {
-            return Err(format!("document block start does not match block {block}"));
-        }
-        for (offset, document) in documents.into_iter().enumerate() {
+        for (offset, (document, content)) in documents.into_iter().enumerate() {
             let index = start + offset as u32;
             if index as usize >= self.rows.len() {
-                return Err("document block exceeds document index".to_string());
+                return Err("page exceeds document index".to_string());
             }
             self.documents.insert(index, document);
+            self.content.insert(index, content);
         }
-        self.loaded_document_blocks.insert(block);
-        Ok(())
-    }
-
-    pub fn load_lexicon_block(
-        &mut self,
-        block: u32,
-        bytes: &[u8],
-        decoded_bytes: u64,
-    ) -> Result<(), String> {
-        for (term, posting_chunk) in
-            decode_lexicon_block(&decompress_artifact(bytes, decoded_bytes)?)?
-        {
-            if self.lexicon.insert(term.clone(), posting_chunk).is_some() {
-                return Err(format!("duplicate lexicon term across blocks: {term}"));
-            }
-        }
-        self.loaded_lexicon_blocks.insert(block);
+        self.loaded_pages.insert(page);
         Ok(())
     }
 
@@ -226,28 +198,6 @@ impl SearchEngine {
         Ok(())
     }
 
-    pub fn load_content_chunk(
-        &mut self,
-        chunk: u32,
-        bytes: &[u8],
-        decoded_bytes: u64,
-    ) -> Result<(), String> {
-        for (document, content) in decode_content(&decompress_artifact(bytes, decoded_bytes)?)? {
-            if self.content.insert(document, content).is_some() {
-                return Err(format!(
-                    "duplicate document across content chunks: {document}"
-                ));
-            }
-        }
-        self.loaded_content_chunks.insert(chunk);
-        Ok(())
-    }
-
-    pub fn clear_content(&mut self) {
-        self.content.clear();
-        self.loaded_content_chunks.clear();
-    }
-
     pub fn begin_query(&self, request: &Query) -> Result<QueryPreparation, String> {
         Self::validate_request(request)?;
         Ok(QueryPreparation {
@@ -256,8 +206,10 @@ impl SearchEngine {
         })
     }
 
-    fn lexicon_block_for(&self, term: &str) -> Option<u32> {
-        match self.lexicon_firsts.binary_search_by(|first| first.as_str().cmp(term)) {
+    /// The postings chunk a term would be in. A term absent from the corpus names a chunk
+    /// that turns out not to hold it, which costs one small read and finds nothing.
+    fn postings_chunk_for(&self, term: &str) -> Option<u32> {
+        match self.postings_firsts.binary_search_by(|first| first.as_str().cmp(term)) {
             Ok(index) => Some(index as u32),
             Err(0) => None,
             Err(index) => Some(index as u32 - 1),
@@ -270,64 +222,36 @@ impl SearchEngine {
             .collect()
     }
 
-    pub fn required_lexicon_blocks(&self, preparation: &QueryPreparation) -> Vec<BlockRef> {
-        let ids: BTreeSet<u32> = preparation
-            .analysis
-            .retrieval_terms
-            .iter()
-            .filter_map(|term| self.lexicon_block_for(term))
-            .filter(|block| !self.loaded_lexicon_blocks.contains(block))
-            .collect();
-        Self::refs(&self.tables.lexicon, ids)
-    }
-
     pub fn required_posting_chunks(&self, preparation: &QueryPreparation) -> Vec<BlockRef> {
         let ids: BTreeSet<u32> = preparation
             .analysis
             .retrieval_terms
             .iter()
-            .filter_map(|term| self.lexicon.get(term).copied())
+            .filter_map(|term| self.postings_chunk_for(term))
             .filter(|chunk| !self.loaded_posting_chunks.contains(chunk))
             .collect();
         Self::refs(&self.tables.postings, ids)
     }
 
-    fn document_block_for(&self, document: u32) -> Option<u32> {
-        let index = match self
-            .document_block_starts
-            .binary_search_by(|start| start.cmp(&document))
-        {
-            Ok(index) => index,
-            Err(0) => return None,
-            Err(index) => index - 1,
-        };
-        Some(index as u32)
+    fn page_for(&self, document: u32) -> Option<u32> {
+        match self.page_starts.binary_search(&document) {
+            Ok(index) => Some(index as u32),
+            Err(0) => None,
+            Err(index) => Some(index as u32 - 1),
+        }
     }
 
-    /// The blocks describing one page of a plan. Ranking itself needs none of them.
-    pub fn required_document_blocks(&self, plan: &QueryPlan, offset: usize, limit: usize) -> Vec<BlockRef> {
+    /// The pages showing one page of results. Ranking itself needs none of them.
+    pub fn required_pages(&self, plan: &QueryPlan, offset: usize, limit: usize) -> Vec<BlockRef> {
         let ids: BTreeSet<u32> = plan
             .ranked
             .iter()
             .skip(offset)
             .take(limit)
-            .filter_map(|candidate| self.document_block_for(candidate.document))
-            .filter(|block| !self.loaded_document_blocks.contains(block))
+            .filter_map(|candidate| self.page_for(candidate.document))
+            .filter(|page| !self.loaded_pages.contains(page))
             .collect();
-        Self::refs(&self.tables.documents, ids)
-    }
-
-    pub fn required_content_chunks(&self, plan: &QueryPlan, offset: usize, limit: usize) -> Vec<BlockRef> {
-        let ids: BTreeSet<u32> = plan
-            .ranked
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .filter_map(|candidate| self.documents.get(&candidate.document))
-            .map(|document| document.content_chunk)
-            .filter(|chunk| !self.loaded_content_chunks.contains(chunk))
-            .collect();
-        Self::refs(&self.tables.content, ids)
+        Self::refs(&self.tables.pages, ids)
     }
 
     pub fn filter_options(&self) -> FilterOptions {
@@ -497,7 +421,7 @@ impl SearchEngine {
         let missing = analysis
             .retrieval_terms
             .iter()
-            .filter_map(|term| self.lexicon.get(term).copied())
+            .filter_map(|term| self.postings_chunk_for(term))
             .filter(|chunk| !self.loaded_posting_chunks.contains(chunk))
             .collect::<BTreeSet<_>>();
         if !missing.is_empty() {
@@ -659,33 +583,16 @@ impl SearchEngine {
         &self,
         plan: &QueryPlan,
         candidate: &RankedCandidate,
-        with_snippet: bool,
     ) -> Result<SearchResult, String> {
         let document = self
             .documents
             .get(&candidate.document)
             .ok_or_else(|| format!("required document is not loaded: {}", candidate.document))?;
-        let snippet = if with_snippet {
-            if !self.loaded_content_chunks.contains(&document.content_chunk) {
-                return Err(format!(
-                    "required content chunk is not loaded: {}",
-                    document.content_chunk
-                ));
-            }
-            let content = self
-                .content
-                .get(&candidate.document)
-                .map(String::as_str)
-                .unwrap_or("");
-            Some(build_snippet(
-                content,
-                &document.title,
-                &plan.query,
-                &candidate.matched_terms,
-            ))
-        } else {
-            None
-        };
+        let content = self
+            .content
+            .get(&candidate.document)
+            .ok_or_else(|| format!("required page is not loaded: {}", candidate.document))?;
+        let snippet = Some(build_snippet(content, &document.title, &plan.query, &candidate.matched_terms));
         let highlights = |text: &str| highlight_ranges(text, &plan.query, &candidate.matched_terms);
         Ok(SearchResult {
             id: document.id.clone(),
@@ -698,26 +605,18 @@ impl SearchEngine {
             section: document.section.clone(),
             kind: document.kind,
             category: document.category.clone(),
-            title_highlights: if with_snippet {
-                highlights(&document.title)
-            } else {
-                Vec::new()
-            },
+            title_highlights: highlights(&document.title),
             snippet_highlights: snippet.as_deref().map(highlights).unwrap_or_default(),
             snippet,
-            attachments: if with_snippet {
-                document
-                    .attachments
-                    .iter()
-                    .map(|attachment| SearchAttachment {
-                        url: attachment.url.clone(),
-                        name: attachment.name.clone(),
-                        extension: attachment.extension.clone(),
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            },
+            attachments: document
+                .attachments
+                .iter()
+                .map(|attachment| SearchAttachment {
+                    url: attachment.url.clone(),
+                    name: attachment.name.clone(),
+                    extension: attachment.extension.clone(),
+                })
+                .collect(),
         })
     }
 
@@ -726,28 +625,18 @@ impl SearchEngine {
         plan: &QueryPlan,
         offset: usize,
         limit: usize,
-        with_snippet: bool,
     ) -> Result<SearchResponse, String> {
         let results = plan
             .ranked
             .iter()
             .skip(offset)
             .take(limit)
-            .map(|candidate| self.result(plan, candidate, with_snippet))
+            .map(|candidate| self.result(plan, candidate))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(SearchResponse {
             total_candidates: plan.total_candidates,
             results,
         })
-    }
-
-    pub fn result_shells(
-        &self,
-        plan: &QueryPlan,
-        offset: usize,
-        limit: usize,
-    ) -> Result<SearchResponse, String> {
-        self.page(plan, offset, limit, false)
     }
 
     pub fn hydrate_results(
@@ -756,7 +645,7 @@ impl SearchEngine {
         offset: usize,
         limit: usize,
     ) -> Result<SearchResponse, String> {
-        self.page(plan, offset, limit, true)
+        self.page(plan, offset, limit)
     }
 
     pub fn search(&self, request: &Query) -> Result<SearchResponse, String> {

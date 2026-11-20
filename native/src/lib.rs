@@ -51,72 +51,22 @@ impl SearchEngine {
         })
     }
 
-    pub fn load_lexicon_block(
-        &self,
-        block: u32,
-        bytes: Vec<u8>,
-        decoded_bytes: u32,
-    ) -> Result<(), SearchError> {
-        self.session()
-            .load_lexicon_block(block, &bytes, decoded_bytes)
-            .map_err(error)
+    pub fn load_postings_chunk(&self, chunk: u32, bytes: Vec<u8>, decoded_bytes: u32) -> Result<(), SearchError> {
+        self.session().load_postings_chunk(chunk, &bytes, decoded_bytes).map_err(error)
     }
 
-    pub fn load_document_block(
-        &self,
-        block: u32,
-        bytes: Vec<u8>,
-        decoded_bytes: u32,
-    ) -> Result<(), SearchError> {
-        self.session()
-            .load_document_block(block, &bytes, decoded_bytes)
-            .map_err(error)
+    pub fn load_page(&self, page: u32, bytes: Vec<u8>, decoded_bytes: u32) -> Result<(), SearchError> {
+        self.session().load_page(page, &bytes, decoded_bytes).map_err(error)
     }
 
-    pub fn load_postings_chunk(
-        &self,
-        chunk: u32,
-        bytes: Vec<u8>,
-        decoded_bytes: u32,
-    ) -> Result<(), SearchError> {
-        self.session()
-            .load_postings_chunk(chunk, &bytes, decoded_bytes)
-            .map_err(error)
-    }
-
-    pub fn load_content_chunk(
-        &self,
-        chunk: u32,
-        bytes: Vec<u8>,
-        decoded_bytes: u32,
-    ) -> Result<(), SearchError> {
-        self.session()
-            .load_content_chunk(chunk, &bytes, decoded_bytes)
-            .map_err(error)
-    }
-
-    pub fn clear_content(&self) {
-        self.session().clear_content();
-    }
-
+    /// Prepares a query; returns the postings chunks to load.
     pub fn begin_search(&self, request_json: String) -> Result<String, SearchError> {
         self.session().begin_search(&request_json).map_err(error)
     }
 
-    pub fn required_posting_chunks(&self) -> Result<String, SearchError> {
-        self.session().required_posting_chunks().map_err(error)
-    }
-
+    /// Ranks the query; returns the pages to load for the requested results.
     pub fn plan_search(&self) -> Result<String, SearchError> {
         self.session().plan_search().map_err(error)
-    }
-
-    pub fn ranked_results(&self) -> Result<String, SearchError> {
-        self.session().ranked_results().map_err(error)
-    }
-
-    pub fn required_content_chunks(&self) -> Result<String, SearchError> {
-        self.session().required_content_chunks().map_err(error)
     }
 
     pub fn hydrate_search(&self) -> Result<String, SearchError> {

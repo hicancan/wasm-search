@@ -52,7 +52,6 @@ const client = new SearchClient({ baseUrl: '/search' });
 await client.initialize();
 const { totalCandidates, results } = await client.search(
   { query: '转专业', limit: 10, sort: 'relevance', filters: { category: 'notice' } },
-  ranked => render(ranked),   // exact order first, snippets follow
 );
 ```
 
@@ -66,15 +65,18 @@ without analysing text itself.
 Bundles are immutable: serve each build from its own directory and cache it
 forever.
 
-Bundle format v3 has one index and a few pack files. The index is the only read a
+Bundle format v5 has one index and a few pack files. The index is the only read a
 client makes before its first query: it holds what ranking needs for every document
-(normalized title, source, category, date, kind) and where every block lies in the
-packs. A query then fetches, by byte range, the lexicon and postings blocks of its
-terms and the document and content blocks of the page it shows. A server that ignores
-range requests still works, at the cost of whole packs. Hosts drive this through the
-engine: `beginSearch`, `requiredPostingChunks`, `planSearch`, `rankedResults`,
-`requiredContentChunks`, `hydrateSearch`, each of the `required` and `begin` and `plan`
-calls naming the blocks to load next.
+(normalized title, source, category, date, kind), the first term of every postings
+block and the first document of every page, and where every block lies in the packs.
+A query then makes two rounds of byte-range reads: the postings blocks of its terms,
+then the pages holding the documents it shows (a page carries each document's
+metadata and text, so the results arrive complete, snippets included). The browser
+client reads neighbouring blocks of a pack with one range and keeps every block it
+has read in Cache Storage under the bundle's address, so a repeated query, or a
+reload, reads nothing again. A server that ignores range requests still works, at
+the cost of whole packs. Hosts drive this through the engine: `beginSearch` names
+the postings blocks, `planSearch` the pages, and `hydrateSearch` returns the results.
 
 ## Pinyin
 
@@ -100,10 +102,8 @@ With Rust's Android targets, cargo-ndk, the Android NDK and JDK installed, run
 bindings in `native/build/kotlin`, package `top.hicancan.search`. Add these to
 your app's `jniLibs` and Kotlin sources, with JNA's Android AAR on the classpath.
 The engine uses the same bundle artifacts and JSON search protocol as wasm;
-call `beginSearch`, load its lexicon blocks, call `requiredPostingChunks`, load
-its postings, call `requiredDocumentBlocks`, load those document blocks,
-`prepareSearch`, then load
-`requiredContentChunks` and call `hydrateSearch` for each page.
+call `beginSearch` and load the postings blocks it names, call `planSearch` and
+load the pages it names, then call `hydrateSearch`.
 
 ## Repository
 

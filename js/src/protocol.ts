@@ -26,7 +26,6 @@ export type SearchWorkerResponse =
     | {
         type: 'results';
         requestId: number;
-        stage: 'ranked' | 'hydrated';
         response: SearchResponse;
     }
     | {

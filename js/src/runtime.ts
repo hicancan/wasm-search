@@ -58,7 +58,7 @@ export class SearchRuntime {
 
     private async load(json: string, consume: (id: number, bytes: Uint8Array, decoded: number) => void, signal?: AbortSignal): Promise<void> {
         const blocks = JSON.parse(json) as BlockRef[];
-        const loaded = await Promise.all(blocks.map(block => this.source.bytes(block, signal)));
+        const loaded = await this.source.blocks(blocks, signal);
         signal?.throwIfAborted();
         blocks.forEach((block, index) => {
             consume(block.id, new Uint8Array(loaded[index]!), block.decoded_bytes);
@@ -66,33 +66,18 @@ export class SearchRuntime {
         });
     }
 
-    async search(
-        query: Query,
-        onRanked: (response: SearchResponse) => void,
-        signal?: AbortSignal,
-    ): Promise<SearchResponse> {
+    /** Two rounds: the postings of the query's terms, then the pages of the results shown. */
+    async search(query: Query, signal?: AbortSignal): Promise<SearchResponse> {
         if (query.query.trim().length === 1) {
             throw new Error('a query must be empty or contain at least two characters');
         }
         // Blocks only accumulate between queries; past the budget, start clean.
         if (this.loadedBytes > this.workingSetBudgetBytes) this.resetEngine();
         const engine = this.requireEngine();
-        const request = JSON.stringify(query);
-        await this.load(engine.begin_search(request), (id, bytes, decoded) => engine.load_lexicon_block(id, bytes, decoded), signal);
-        await this.load(engine.required_posting_chunks(), (id, bytes, decoded) => engine.load_postings_chunk(id, bytes, decoded), signal);
-        await this.load(engine.plan_search(), (id, bytes, decoded) => engine.load_document_block(id, bytes, decoded), signal);
+        await this.load(engine.begin_search(JSON.stringify(query)), (id, bytes, decoded) => engine.load_postings_chunk(id, bytes, decoded), signal);
+        await this.load(engine.plan_search(), (id, bytes, decoded) => engine.load_page(id, bytes, decoded), signal);
         signal?.throwIfAborted();
-        onRanked(JSON.parse(engine.ranked_results()) as SearchResponse);
-        const before = this.loadedBytes;
-        engine.clear_content();
-        await this.load(engine.required_content_chunks(), (id, bytes, decoded) => engine.load_content_chunk(id, bytes, decoded), signal);
-        signal?.throwIfAborted();
-        this.loadedBytes = before;
-        try {
-            return JSON.parse(engine.hydrate_search()) as SearchResponse;
-        } finally {
-            engine.clear_content();
-        }
+        return JSON.parse(engine.hydrate_search()) as SearchResponse;
     }
 
     dispose(): void {

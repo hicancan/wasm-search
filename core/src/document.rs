@@ -62,7 +62,6 @@ pub(crate) struct DocumentMeta {
     pub kind: DocumentKind,
     pub category: Option<String>,
     pub attachments: Vec<Attachment>,
-    pub content_chunk: u32,
 }
 
 #[derive(Clone, Copy, Debug)]

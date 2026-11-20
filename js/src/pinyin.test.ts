@@ -21,15 +21,11 @@ it('compiles pinyin once and searches full, spaced, initial and mixed digit quer
     try {
         for (const [query, expected] of [['tushuguan', 'library'], ['tu shu guan', 'library'],
             ['tsg', 'literal'], ['JIAO3', 'teaching'], ['j3', 'teaching'], ['图书馆', 'library']]) {
-            for (const block of JSON.parse(engine.begin_search(JSON.stringify({ query })))) engine.load_lexicon_block(block.id, read(block), block.decoded_bytes);
-            for (const block of JSON.parse(engine.required_posting_chunks())) engine.load_postings_chunk(block.id, read(block), block.decoded_bytes);
-            for (const block of JSON.parse(engine.plan_search())) engine.load_document_block(block.id, read(block), block.decoded_bytes);
-            const shells = JSON.parse(engine.ranked_results());
-            expect(shells.results[0].id, query).toBe(expected);
-            if (query === 'tsg') expect(shells.results[1].id).toBe('library');
-            for (const block of JSON.parse(engine.required_content_chunks())) engine.load_content_chunk(block.id, read(block), block.decoded_bytes);
+            for (const block of JSON.parse(engine.begin_search(JSON.stringify({ query })))) engine.load_postings_chunk(block.id, read(block), block.decoded_bytes);
+            for (const block of JSON.parse(engine.plan_search())) engine.load_page(block.id, read(block), block.decoded_bytes);
             const result = engine.hydrate_search();
             expect(JSON.parse(result).results[0].id, query).toBe(expected);
+            if (query === 'tsg') expect(JSON.parse(result).results[1].id).toBe('library');
             expect(result).not.toContain('py:');
         }
     } finally {

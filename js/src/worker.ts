@@ -64,21 +64,11 @@ async function handle(request: Exclude<SearchWorkerRequest, { type: 'cancel' }>)
     const controller = searches.get(request.requestId);
     if (!controller || controller.signal.aborted) return;
     try {
-        const response = await runtime.search(request.query, ranked => {
-            if (!controller.signal.aborted) {
-                post({
-                    type: 'results',
-                    requestId: request.requestId,
-                    stage: 'ranked',
-                    response: ranked,
-                });
-            }
-        }, controller.signal);
+        const response = await runtime.search(request.query, controller.signal);
         if (!controller.signal.aborted) {
             post({
                 type: 'results',
                 requestId: request.requestId,
-                stage: 'hydrated',
                 response,
             });
         }

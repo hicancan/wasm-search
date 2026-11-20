@@ -26,17 +26,11 @@ pub fn load_engine(bundle: &Path) -> Result<SearchEngine> {
     )
     .map_err(anyhow::Error::msg)?;
     let tables = engine.tables().clone();
-    for (index, artifact) in tables.lexicon.iter().enumerate() {
-        engine.load_lexicon_block(index as u32, &read(bundle, &manifest, *artifact)?, artifact.decoded_bytes).map_err(anyhow::Error::msg)?;
-    }
-    for (index, artifact) in tables.documents.iter().enumerate() {
-        engine.load_document_block(index as u32, &read(bundle, &manifest, *artifact)?, artifact.decoded_bytes).map_err(anyhow::Error::msg)?;
-    }
     for (index, artifact) in tables.postings.iter().enumerate() {
         engine.load_postings_chunk(index as u32, &read(bundle, &manifest, *artifact)?, artifact.decoded_bytes).map_err(anyhow::Error::msg)?;
     }
-    for (index, artifact) in tables.content.iter().enumerate() {
-        engine.load_content_chunk(index as u32, &read(bundle, &manifest, *artifact)?, artifact.decoded_bytes).map_err(anyhow::Error::msg)?;
+    for (index, artifact) in tables.pages.iter().enumerate() {
+        engine.load_page(index as u32, &read(bundle, &manifest, *artifact)?, artifact.decoded_bytes).map_err(anyhow::Error::msg)?;
     }
     Ok(engine)
 }

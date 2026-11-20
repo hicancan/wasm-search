@@ -6,7 +6,7 @@ import type { ArtifactRef, SearchBundleManifest } from './artifacts.js';
 
 const bytes = new Uint8Array([1, 2, 3]);
 const reference: ArtifactRef = { pack: 0, offset: 0, bytes: bytes.byteLength, decoded_bytes: 3 };
-const manifest: SearchBundleManifest = { format: 'wasm-search-bundle-v4', index: reference, packs: ['pack-000.bin'], profile: { aliases: [] } };
+const manifest: SearchBundleManifest = { format: 'wasm-search-bundle-v5', index: reference, packs: ['pack-000.bin'], profile: { aliases: [] } };
 const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200 });
 const ranged = (body: BodyInit = bytes) => new Response(body, { status: 206 });
 /** A server: the manifest by name, everything else from `pack`. */
@@ -29,6 +29,21 @@ describe('ArtifactSource', () => {
         const calls = packCalls(fetchMock);
         expect(calls).toHaveLength(1);
         expect(calls[0]).toEqual(['/data/search/pack-000.bin', expect.objectContaining({ headers: { Range: 'bytes=0-2' } })]);
+    });
+
+    it('reads neighbouring blocks of one pack with one range and splits them', async () => {
+        const fetchMock = serve(() => ranged(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])));
+        vi.stubGlobal('fetch', fetchMock);
+        const source = new ArtifactSource('/s', new CacheStore(1024));
+        const parts = await source.blocks([
+            { pack: 0, offset: 13, bytes: 3, decoded_bytes: 3 },
+            { pack: 0, offset: 10, bytes: 3, decoded_bytes: 3 },
+            { pack: 0, offset: 16, bytes: 2, decoded_bytes: 2 },
+        ]);
+        expect(parts.map(part => [...new Uint8Array(part)])).toEqual([[4, 5, 6], [1, 2, 3], [7, 8]]);
+        const calls = packCalls(fetchMock);
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toEqual(['/s/pack-000.bin', expect.objectContaining({ headers: { Range: 'bytes=10-17' } })]);
     });
 
     it('takes the block out of a whole pack when a server ignores the range', async () => {

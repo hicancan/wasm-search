@@ -14,7 +14,7 @@ export interface BlockRef extends ArtifactRef {
 }
 
 export interface SearchBundleManifest {
-    format: 'wasm-search-bundle-v4';
+    format: 'wasm-search-bundle-v5';
     index: ArtifactRef;
     packs: string[];
     /** Faster addresses for the packs, by position; `packs` remains the fallback. */
@@ -24,7 +24,7 @@ export interface SearchBundleManifest {
 
 function parseManifest(value: unknown): SearchBundleManifest {
     const manifest = value as Partial<SearchBundleManifest> | null;
-    if (!manifest || manifest.format !== 'wasm-search-bundle-v4') {
+    if (!manifest || manifest.format !== 'wasm-search-bundle-v5') {
         throw new Error('unsupported search bundle format');
     }
     if (!manifest.index || !manifest.packs?.length) {
@@ -33,11 +33,20 @@ function parseManifest(value: unknown): SearchBundleManifest {
     return manifest as SearchBundleManifest;
 }
 
-/** Fetches a bundle's files from one directory URL, with an LRU byte cache. */
+/** Blocks of one pack closer than this are read as one range: a little extra data costs less than a round trip. */
+const COALESCE_GAP_BYTES = 16 * 1024;
+const PERSISTENT_PREFIX = 'wasm-search ';
+
+/**
+ * Fetches a bundle's files from one directory URL. Blocks are kept in an LRU byte cache and, where the
+ * browser offers Cache Storage, persistently: a bundle is immutable, so a block read once is never read
+ * from the network again until the bundle changes, and then the old bundle's cache is dropped.
+ */
 export class ArtifactSource {
     private readonly baseUrl: string;
     private readonly cache: CacheStore;
     private manifestRequest: Promise<SearchBundleManifest> | null = null;
+    private persistentCache: Promise<Cache | null> | null = null;
     private readonly requests = new Map<string, Promise<ArrayBuffer>>();
     private activeReads = 0;
     private readonly waitingReads: Array<() => void> = [];
@@ -56,32 +65,97 @@ export class ArtifactSource {
     }
 
     /** One block by byte range; a server that ignores the range still yields the same bytes. */
-    bytes(reference: ArtifactRef, signal?: AbortSignal): Promise<ArrayBuffer> {
-        const key = `${reference.pack}:${reference.offset}`;
-        const cached = this.cache.get(key);
-        if (cached) return Promise.resolve(cached);
-        const active = this.requests.get(key);
-        if (active) return active;
-        const request = this.manifest(signal).then(manifest => {
-            const path = manifest.packs[reference.pack];
-            if (!path) throw new Error(`search bundle pack does not exist: ${reference.pack}`);
-            const range = `bytes=${reference.offset}-${reference.offset + reference.bytes - 1}`;
-            const decode = async (response: Response) => {
-                const body = await response.arrayBuffer();
-                const bytes = response.status === 206 ? body : body.slice(reference.offset, reference.offset + reference.bytes);
-                if (bytes.byteLength !== reference.bytes) throw new Error(`truncated ${path}`);
-                this.cache.set(key, bytes);
-                return bytes;
-            };
-            const mirror = manifest.mirrors?.[reference.pack];
-            if (!mirror) return this.read(`${this.baseUrl}/${path}`, decode, signal, range);
-            return this.read(mirror, decode, signal, range).catch(error => {
-                if (signal?.aborted) throw error;
-                return this.read(`${this.baseUrl}/${path}`, decode, signal, range);
+    async bytes(reference: ArtifactRef, signal?: AbortSignal): Promise<ArrayBuffer> {
+        return (await this.blocks([reference], signal))[0]!;
+    }
+
+    /**
+     * Several blocks, in the order asked: from memory, then from persistent cache, then from the network,
+     * where neighbouring blocks of one pack share a single range request.
+     */
+    async blocks(references: ArtifactRef[], signal?: AbortSignal): Promise<ArrayBuffer[]> {
+        const manifest = await this.manifest(signal);
+        const persistent = await this.persistent();
+        const key = (reference: ArtifactRef) => `${reference.pack}:${reference.offset}`;
+        const found = new Map<string, Promise<ArrayBuffer>>();
+        const missing: ArtifactRef[] = [];
+        for (const reference of references) {
+            const id = key(reference);
+            if (found.has(id)) continue;
+            const cached = this.cache.get(id);
+            if (cached) { found.set(id, Promise.resolve(cached)); continue; }
+            const active = this.requests.get(id);
+            if (active) { found.set(id, active); continue; }
+            missing.push(reference);
+        }
+        const stored = await Promise.all(missing.map(reference => persistent?.match(this.cacheUrl(manifest, reference)).then(response => response?.arrayBuffer()) ?? Promise.resolve(undefined)));
+        const network: ArtifactRef[] = [];
+        missing.forEach((reference, index) => {
+            const bytes = stored[index];
+            if (bytes && bytes.byteLength === reference.bytes) {
+                this.cache.set(key(reference), bytes);
+                found.set(key(reference), Promise.resolve(bytes));
+            } else network.push(reference);
+        });
+        for (const group of coalesce(network)) {
+            const read = this.range(manifest, group, signal);
+            group.forEach((reference, index) => {
+                const id = key(reference);
+                const one = read.then(parts => {
+                    const bytes = parts[index]!;
+                    this.cache.set(id, bytes);
+                    void persistent?.put(this.cacheUrl(manifest, reference), new Response(bytes)).catch(() => undefined);
+                    return bytes;
+                }).finally(() => this.requests.delete(id));
+                this.requests.set(id, one);
+                found.set(id, one);
             });
-        }).finally(() => this.requests.delete(key));
-        this.requests.set(key, request);
-        return request;
+        }
+        return Promise.all(references.map(reference => found.get(key(reference))!));
+    }
+
+    /** One range covering a run of blocks of one pack, split back into the blocks. */
+    private range(manifest: SearchBundleManifest, group: ArtifactRef[], signal?: AbortSignal): Promise<ArrayBuffer[]> {
+        const first = group[0]!;
+        const pack = first.pack;
+        const path = manifest.packs[pack];
+        if (!path) return Promise.reject(new Error(`search bundle pack does not exist: ${pack}`));
+        const start = first.offset;
+        const end = Math.max(...group.map(reference => reference.offset + reference.bytes));
+        const range = `bytes=${start}-${end - 1}`;
+        const decode = async (response: Response) => {
+            const body = await response.arrayBuffer();
+            const window = response.status === 206 ? body : body.slice(start, end);
+            if (window.byteLength !== end - start) throw new Error(`truncated ${path}`);
+            return group.map(reference => window.slice(reference.offset - start, reference.offset - start + reference.bytes));
+        };
+        const mirror = manifest.mirrors?.[pack];
+        if (!mirror) return this.read(`${this.baseUrl}/${path}`, decode, signal, range);
+        return this.read(mirror, decode, signal, range).catch(error => {
+            if (signal?.aborted) throw error;
+            return this.read(`${this.baseUrl}/${path}`, decode, signal, range);
+        });
+    }
+
+    private cacheUrl(manifest: SearchBundleManifest, reference: ArtifactRef): string {
+        return `${this.baseUrl}/${manifest.packs[reference.pack]}?block=${reference.offset}-${reference.bytes}`;
+    }
+
+    /** This bundle's persistent cache; caches of other bundles are dropped when it is first opened. */
+    private persistent(): Promise<Cache | null> {
+        this.persistentCache ??= (async () => {
+            if (typeof caches === 'undefined') return null;
+            try {
+                const name = PERSISTENT_PREFIX + this.baseUrl;
+                for (const other of await caches.keys()) {
+                    if (other.startsWith(PERSISTENT_PREFIX) && other !== name) await caches.delete(other);
+                }
+                return await caches.open(name);
+            } catch {
+                return null;
+            }
+        })();
+        return this.persistentCache;
     }
 
     /** Keep the slot until the body is consumed: HTTP/2 streams outlive response headers. */
@@ -126,4 +200,22 @@ export class ArtifactSource {
             this.waitingReads.shift()?.();
         }
     }
+}
+
+/** Blocks grouped by pack and position, a group closing where the next block lies too far ahead. */
+function coalesce(references: ArtifactRef[]): ArtifactRef[][] {
+    const sorted = [...references].sort((left, right) => left.pack - right.pack || left.offset - right.offset);
+    const groups: ArtifactRef[][] = [];
+    let end = 0;
+    for (const reference of sorted) {
+        const group = groups.at(-1);
+        if (group && group[0]!.pack === reference.pack && reference.offset <= end + COALESCE_GAP_BYTES) {
+            group.push(reference);
+            end = Math.max(end, reference.offset + reference.bytes);
+        } else {
+            groups.push([reference]);
+            end = reference.offset + reference.bytes;
+        }
+    }
+    return groups;
 }

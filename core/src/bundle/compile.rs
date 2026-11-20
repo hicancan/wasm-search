@@ -1,7 +1,4 @@
-use super::codec::{
-    encode_content, encode_document_block, encode_index, encode_lexicon_block, encode_postings,
-    BundleIndex, RankRow,
-};
+use super::codec::{encode_index, encode_page, encode_postings, BundleIndex, RankRow};
 use super::compression::compress_artifact;
 use super::model::{ArtifactRef, BlockTables, CompiledBundle, SearchBundleManifest, SEARCH_BUNDLE_FORMAT};
 use crate::analysis::{analyze_document, normalize_text};
@@ -11,9 +8,7 @@ use crate::query::{FilterOption, FilterOptions};
 use std::collections::{BTreeMap, HashMap};
 
 const POSTINGS_TARGET_CHUNK_BYTES: usize = 32 * 1024;
-const LEXICON_TARGET_BLOCK_BYTES: usize = 32 * 1024;
-const DOCUMENT_TARGET_BLOCK_BYTES: usize = 16 * 1024;
-const CONTENT_TARGET_CHUNK_BYTES: usize = 32 * 1024;
+const PAGE_TARGET_BYTES: usize = 32 * 1024;
 const PACK_TARGET_BYTES: usize = 16 * 1024 * 1024;
 const CHUNK_HEADER_BYTES: usize = 12;
 
@@ -46,17 +41,6 @@ fn posting_entry_bytes(term: &str, postings: &[Posting]) -> usize {
         previous_document = posting.document;
     }
     bytes
-}
-
-fn lexicon_entry_bytes(previous: &str, term: &str, chunk: u32) -> usize {
-    let prefix = term
-        .char_indices()
-        .zip(previous.char_indices())
-        .take_while(|((_, left), (_, right))| left == right)
-        .last()
-        .map(|((index, character), _)| index + character.len_utf8())
-        .unwrap_or(0);
-    var_u32_bytes(prefix as u32) + 4 + term.len() - prefix + var_u32_bytes(chunk)
 }
 
 fn document_filter_options(documents: &[DocumentMeta]) -> FilterOptions {
@@ -118,27 +102,6 @@ fn document_meta_bytes(document: &DocumentMeta) -> usize {
     bytes
 }
 
-fn build_contents(documents: &[IndexDocument]) -> (Vec<Vec<(u32, String)>>, Vec<u32>) {
-    let mut chunks: Vec<Vec<(u32, String)>> = Vec::new();
-    let mut current = Vec::new();
-    let mut current_bytes = CHUNK_HEADER_BYTES;
-    let mut assignments = vec![0_u32; documents.len()];
-    for (index, document) in documents.iter().enumerate() {
-        let encoded_bytes = document.content.len() + 8;
-        if !current.is_empty() && current_bytes + encoded_bytes > CONTENT_TARGET_CHUNK_BYTES {
-            chunks.push(std::mem::take(&mut current));
-            current_bytes = CHUNK_HEADER_BYTES;
-        }
-        assignments[index] = chunks.len() as u32;
-        current.push((index as u32, document.content.clone()));
-        current_bytes += encoded_bytes;
-    }
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    (chunks, assignments)
-}
-
 pub fn compile_search_bundle(
     documents: Vec<IndexDocument>,
     profile: Profile,
@@ -159,11 +122,9 @@ pub fn compile_search_bundle_with(
     // Document numbers follow ids, so the last ranking tie-break needs no stored id.
     documents.sort_by(|left, right| left.id.cmp(&right.id));
 
-    let (content_chunks, content_assignments) = build_contents(&documents);
     let metas: Vec<DocumentMeta> = documents
         .iter()
-        .enumerate()
-        .map(|(index, document)| DocumentMeta {
+        .map(|document| DocumentMeta {
             id: document.id.clone(),
             source: document.source.clone(),
             source_name: document.source_name.clone(),
@@ -175,7 +136,6 @@ pub fn compile_search_bundle_with(
             kind: document.kind,
             category: document.category.clone(),
             attachments: document.attachments.clone(),
-            content_chunk: content_assignments[index],
         })
         .collect();
 
@@ -223,52 +183,28 @@ pub fn compile_search_bundle_with(
     }
 
     let filter_options = document_filter_options(&metas);
-    let mut document_blocks: Vec<Vec<DocumentMeta>> = Vec::new();
-    let mut document_block_starts = Vec::new();
-    let mut current_block = Vec::new();
-    let mut current_bytes = 12;
+    // Pages hold runs of documents in document order, each document with its text.
+    let mut pages: Vec<Vec<usize>> = Vec::new();
+    let mut page_starts = Vec::new();
+    let mut current_page = Vec::new();
+    let mut current_bytes = CHUNK_HEADER_BYTES;
     for (index, document) in metas.iter().enumerate() {
-        let encoded_bytes = document_meta_bytes(document);
-        if !current_block.is_empty() && current_bytes + encoded_bytes > DOCUMENT_TARGET_BLOCK_BYTES
-        {
-            document_block_starts.push((index - current_block.len()) as u32);
-            document_blocks.push(std::mem::take(&mut current_block));
-            current_bytes = 12;
+        let encoded_bytes = document_meta_bytes(document) + 4 + documents[index].content.len();
+        if !current_page.is_empty() && current_bytes + encoded_bytes > PAGE_TARGET_BYTES {
+            pages.push(std::mem::take(&mut current_page));
+            current_bytes = CHUNK_HEADER_BYTES;
         }
-        current_block.push(document.clone());
+        if current_page.is_empty() {
+            page_starts.push(index as u32);
+        }
+        current_page.push(index);
         current_bytes += encoded_bytes;
     }
-    if !current_block.is_empty() {
-        document_block_starts.push((metas.len() - current_block.len()) as u32);
-        document_blocks.push(current_block);
+    if !current_page.is_empty() {
+        pages.push(current_page);
     }
-    let mut lexicon_entries = Vec::new();
-    let mut encoded_postings = Vec::with_capacity(postings_chunks.len());
-    for (chunk_index, entries) in postings_chunks.iter().enumerate() {
-        for (term, _) in entries {
-            lexicon_entries.push((term.clone(), chunk_index as u32));
-        }
-        encoded_postings.push(encode_postings(entries));
-    }
-    let lexicon_terms = lexicon_entries.len();
-    let mut lexicon_blocks: Vec<Vec<(String, u32)>> = Vec::new();
-    let mut current_block = Vec::new();
-    let mut current_bytes = CHUNK_HEADER_BYTES;
-    let mut previous = String::new();
-    for (term, chunk) in &lexicon_entries {
-        let encoded_bytes = lexicon_entry_bytes(&previous, term, *chunk);
-        if !current_block.is_empty() && current_bytes + encoded_bytes > LEXICON_TARGET_BLOCK_BYTES {
-            lexicon_blocks.push(std::mem::take(&mut current_block));
-            current_bytes = CHUNK_HEADER_BYTES;
-            previous.clear();
-        }
-        current_block.push((term.clone(), *chunk));
-        current_bytes += lexicon_entry_bytes(&previous, term, *chunk);
-        previous.clone_from(term);
-    }
-    if !current_block.is_empty() {
-        lexicon_blocks.push(current_block);
-    }
+    let terms = postings_chunks.iter().map(Vec::len).sum();
+    let postings_firsts: Vec<String> = postings_chunks.iter().map(|entries| entries[0].0.clone()).collect();
 
     // Pack zero holds the index alone; blocks follow, grouped by kind.
     let mut packs: Vec<Vec<u8>> = vec![Vec::new()];
@@ -284,10 +220,15 @@ pub fn compile_search_bundle_with(
         ArtifactRef { pack: index as u32, offset, bytes: compressed.len() as u64, decoded_bytes: decoded.len() as u64 }
     };
     let tables = BlockTables {
-        lexicon: lexicon_blocks.iter().map(|entries| place(encode_lexicon_block(entries))).collect(),
-        postings: encoded_postings.into_iter().map(&mut place).collect(),
-        documents: document_blocks.iter().enumerate().map(|(index, entries)| place(encode_document_block(document_block_starts[index], entries))).collect(),
-        content: content_chunks.iter().map(|entries| place(encode_content(entries))).collect(),
+        postings: postings_chunks.iter().map(|entries| place(encode_postings(entries))).collect(),
+        pages: pages
+            .iter()
+            .map(|members| {
+                let entries: Vec<(&DocumentMeta, &str)> =
+                    members.iter().map(|&index| (&metas[index], documents[index].content.as_str())).collect();
+                place(encode_page(members[0] as u32, &entries))
+            })
+            .collect(),
     };
 
     let mut sources: Vec<String> = metas.iter().map(|document| document.source.clone()).collect();
@@ -333,9 +274,9 @@ pub fn compile_search_bundle_with(
         dates,
         entities,
         rows,
-        block_starts: document_block_starts,
+        page_starts,
         filter_options,
-        lexicon_firsts: lexicon_blocks.iter().map(|block| block[0].0.clone()).collect(),
+        postings_firsts,
         tables: tables.clone(),
     };
     let encoded = encode_index(&index);
@@ -355,7 +296,7 @@ pub fn compile_search_bundle_with(
         packs,
         tables,
         document_count: metas.len() as u32,
-        lexicon_terms,
+        terms,
     })
 }
 

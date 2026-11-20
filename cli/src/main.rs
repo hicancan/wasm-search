@@ -45,7 +45,7 @@ fn build(args: &[String]) -> Result<()> {
         "{}",
         serde_json::json!({
             "documents": bundle.document_count,
-            "lexicon_terms": bundle.lexicon_terms,
+            "terms": bundle.terms,
             "files": bundle.packs.len() + 1,
             "bytes": bundle.total_artifact_bytes(),
             "elapsed_ms": started.elapsed().as_millis(),

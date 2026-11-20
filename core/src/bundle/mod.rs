@@ -9,7 +9,6 @@ pub use model::{
 };
 
 pub(crate) use codec::{
-    decode_content, decode_document_block, decode_index, decode_lexicon_block, decode_postings,
-    BundleIndex, RankRow,
+    decode_index, decode_page, decode_postings, BundleIndex, RankRow,
 };
 pub(crate) use compression::decompress_artifact;

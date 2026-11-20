@@ -27,54 +27,15 @@ impl SearchSession {
         })
     }
 
-    pub fn load_lexicon_block(
-        &mut self,
-        block: u32,
-        bytes: &[u8],
-        decoded_bytes: u32,
-    ) -> Result<(), String> {
-        self.inner
-            .load_lexicon_block(block, bytes, decoded_bytes.into())
-            .map_err(message)
+    pub fn load_postings_chunk(&mut self, chunk: u32, bytes: &[u8], decoded_bytes: u32) -> Result<(), String> {
+        self.inner.load_postings_chunk(chunk, bytes, decoded_bytes.into()).map_err(message)
     }
 
-    pub fn load_document_block(
-        &mut self,
-        block: u32,
-        bytes: &[u8],
-        decoded_bytes: u32,
-    ) -> Result<(), String> {
-        self.inner
-            .load_document_block(block, bytes, decoded_bytes.into())
-            .map_err(message)
+    pub fn load_page(&mut self, page: u32, bytes: &[u8], decoded_bytes: u32) -> Result<(), String> {
+        self.inner.load_page(page, bytes, decoded_bytes.into()).map_err(message)
     }
 
-    pub fn load_postings_chunk(
-        &mut self,
-        chunk: u32,
-        bytes: &[u8],
-        decoded_bytes: u32,
-    ) -> Result<(), String> {
-        self.inner
-            .load_postings_chunk(chunk, bytes, decoded_bytes.into())
-            .map_err(message)
-    }
-
-    pub fn load_content_chunk(
-        &mut self,
-        chunk: u32,
-        bytes: &[u8],
-        decoded_bytes: u32,
-    ) -> Result<(), String> {
-        self.inner
-            .load_content_chunk(chunk, bytes, decoded_bytes.into())
-            .map_err(message)
-    }
-
-    pub fn clear_content(&mut self) {
-        self.inner.clear_content();
-    }
-
+    /// Prepares a query and names the postings chunks it reads: the first of its two rounds.
     pub fn begin_search(&mut self, request_json: &str) -> Result<String, String> {
         let request: Query = serde_json::from_str(request_json).map_err(message)?;
         self.page_offset = request.offset;
@@ -88,22 +49,14 @@ impl SearchSession {
             return Ok("[]".to_string());
         }
         let preparation = self.inner.begin_query(&request).map_err(message)?;
-        let chunks = self.inner.required_lexicon_blocks(&preparation);
+        let chunks = self.inner.required_posting_chunks(&preparation);
         self.preparation = Some(preparation);
         self.plan = None;
         self.plan_request = Some(request);
         serde_json::to_string(&chunks).map_err(message)
     }
 
-    pub fn required_posting_chunks(&self) -> Result<String, String> {
-        let preparation = self
-            .preparation
-            .as_ref()
-            .ok_or_else(|| message("query is not prepared"))?;
-        serde_json::to_string(&self.inner.required_posting_chunks(preparation)).map_err(message)
-    }
-
-    /// Ranks the query, then names the document blocks of the requested page.
+    /// Ranks the query, then names the pages of the requested results: the second round.
     pub fn plan_search(&mut self) -> Result<String, String> {
         if self.plan.is_none() {
             self.plan = Some(
@@ -116,22 +69,12 @@ impl SearchSession {
                     .map_err(message)?,
             );
         }
-        serde_json::to_string(&self.inner.required_document_blocks(
+        serde_json::to_string(&self.inner.required_pages(
             self.plan.as_ref().expect("planned"),
             self.page_offset,
             self.page_limit,
         ))
         .map_err(message)
-    }
-
-    pub fn ranked_results(&self) -> Result<String, String> {
-        let plan = self.plan.as_ref().ok_or_else(|| message("query is not planned"))?;
-        serde_json::to_string(&self.inner.result_shells(plan, self.page_offset, self.page_limit).map_err(message)?).map_err(message)
-    }
-
-    pub fn required_content_chunks(&self) -> Result<String, String> {
-        let plan = self.plan.as_ref().ok_or_else(|| message("query is not planned"))?;
-        serde_json::to_string(&self.inner.required_content_chunks(plan, self.page_offset, self.page_limit)).map_err(message)
     }
 
     pub fn hydrate_search(&self) -> Result<String, String> {

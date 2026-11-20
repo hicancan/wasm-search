@@ -2,11 +2,9 @@ use super::model::{ArtifactRef, BlockTables};
 use crate::document::{Attachment, DocumentKind, DocumentMeta, Posting};
 use crate::query::{FilterOption, FilterOptions};
 
-const INDEX_MAGIC: &[u8; 8] = b"WSINDX03";
-const DOCUMENT_BLOCK_MAGIC: &[u8; 8] = b"WSDBK202";
-const LEXICON_BLOCK_MAGIC: &[u8; 8] = b"WSLBK202";
+const INDEX_MAGIC: &[u8; 8] = b"WSINDX05";
+const PAGE_MAGIC: &[u8; 8] = b"WSPAGE05";
 const POSTINGS_MAGIC: &[u8; 8] = b"WSPOST01";
-const CONTENT_MAGIC: &[u8; 8] = b"WSCONT01";
 
 struct Writer {
     bytes: Vec<u8>,
@@ -153,7 +151,6 @@ fn encode_document(writer: &mut Writer, document: &DocumentMeta) {
     writer.optional_string(document.section.as_deref());
     writer.u8(encode_kind(document.kind));
     writer.optional_string(document.category.as_deref());
-    writer.u32(document.content_chunk);
     writer.u32(document.attachments.len() as u32);
     for attachment in &document.attachments {
         writer.string(&attachment.url);
@@ -173,7 +170,6 @@ fn decode_document(reader: &mut Reader<'_>) -> Result<DocumentMeta, String> {
     let section = reader.optional_string()?;
     let kind = decode_kind(reader.u8()?)?;
     let category = reader.optional_string()?;
-    let content_chunk = reader.u32()?;
     let attachment_count = reader.u32()? as usize;
     let mut attachments = Vec::with_capacity(attachment_count);
     for _ in 0..attachment_count {
@@ -195,7 +191,6 @@ fn decode_document(reader: &mut Reader<'_>) -> Result<DocumentMeta, String> {
         kind,
         category,
         attachments,
-        content_chunk,
     })
 }
 
@@ -266,10 +261,46 @@ pub struct BundleIndex {
     pub dates: Vec<String>,
     pub entities: Vec<String>,
     pub rows: Vec<RankRow>,
-    pub block_starts: Vec<u32>,
+    /// The first document of each page, ascending.
+    pub page_starts: Vec<u32>,
     pub filter_options: FilterOptions,
-    pub lexicon_firsts: Vec<String>,
+    /// The first term of each postings chunk, ascending: a term's chunk is found here, so a
+    /// query reads its postings without a lexicon round first.
+    pub postings_firsts: Vec<String>,
     pub tables: BlockTables,
+}
+
+/// Sorted terms, each written as the length it shares with the one before and the rest.
+fn encode_sorted_terms(writer: &mut Writer, terms: &[String]) {
+    writer.var_u32(terms.len() as u32);
+    let mut previous = "";
+    for term in terms {
+        let shared = term
+            .char_indices()
+            .zip(previous.char_indices())
+            .take_while(|((_, left), (_, right))| left == right)
+            .last()
+            .map(|((index, character), _)| index + character.len_utf8())
+            .unwrap_or(0);
+        writer.var_u32(shared as u32);
+        writer.string(&term[shared..]);
+        previous = term;
+    }
+}
+
+fn decode_sorted_terms(reader: &mut Reader<'_>) -> Result<Vec<String>, String> {
+    let count = reader.var_u32()? as usize;
+    let mut terms: Vec<String> = Vec::with_capacity(count);
+    for _ in 0..count {
+        let shared = reader.var_u32()? as usize;
+        let previous = terms.last().map(String::as_str).unwrap_or("");
+        if shared > previous.len() || !previous.is_char_boundary(shared) {
+            return Err("invalid shared term prefix".to_string());
+        }
+        let term = format!("{}{}", &previous[..shared], reader.string()?);
+        terms.push(term);
+    }
+    Ok(terms)
 }
 
 fn encode_table(writer: &mut Writer, table: &[ArtifactRef]) {
@@ -318,18 +349,15 @@ pub(super) fn encode_index(index: &BundleIndex) -> Vec<u8> {
             writer.var_u32(*entity);
         }
     }
-    writer.var_u32(index.block_starts.len() as u32);
+    writer.var_u32(index.page_starts.len() as u32);
     let mut previous = 0;
-    for start in &index.block_starts {
+    for start in &index.page_starts {
         writer.var_u32(start - previous);
         previous = *start;
     }
     encode_filter_options(&mut writer, &index.filter_options);
-    writer.var_u32(index.lexicon_firsts.len() as u32);
-    for first in &index.lexicon_firsts {
-        writer.string(first);
-    }
-    for table in [&index.tables.lexicon, &index.tables.postings, &index.tables.documents, &index.tables.content] {
+    encode_sorted_terms(&mut writer, &index.postings_firsts);
+    for table in [&index.tables.postings, &index.tables.pages] {
         encode_table(&mut writer, table);
     }
     writer.finish()
@@ -359,88 +387,49 @@ pub(crate) fn decode_index(bytes: &[u8]) -> Result<BundleIndex, String> {
         rows.push(RankRow { source, category, date, kind, title, url_group, within });
     }
     let count = reader.var_u32()? as usize;
-    let mut block_starts = Vec::with_capacity(count);
+    let mut page_starts = Vec::with_capacity(count);
     let mut previous = 0;
     for _ in 0..count {
         previous += reader.var_u32()?;
-        block_starts.push(previous);
+        page_starts.push(previous);
     }
     let filter_options = decode_filter_options(&mut reader)?;
-    let count = reader.var_u32()? as usize;
-    let mut lexicon_firsts = Vec::with_capacity(count);
-    for _ in 0..count {
-        lexicon_firsts.push(reader.string()?);
-    }
+    let postings_firsts = decode_sorted_terms(&mut reader)?;
     let mut cursor = (u32::MAX, 0);
     let tables = BlockTables {
-        lexicon: decode_table(&mut reader, &mut cursor)?,
         postings: decode_table(&mut reader, &mut cursor)?,
-        documents: decode_table(&mut reader, &mut cursor)?,
-        content: decode_table(&mut reader, &mut cursor)?,
+        pages: decode_table(&mut reader, &mut cursor)?,
     };
     reader.finish()?;
-    Ok(BundleIndex { sources, categories, dates, entities, rows, block_starts, filter_options, lexicon_firsts, tables })
+    if tables.postings.len() != postings_firsts.len() || tables.pages.len() != page_starts.len() {
+        return Err("index tables do not match their keys".to_string());
+    }
+    Ok(BundleIndex { sources, categories, dates, entities, rows, page_starts, filter_options, postings_firsts, tables })
 }
 
-pub(super) fn encode_document_block(start: u32, documents: &[DocumentMeta]) -> Vec<u8> {
-    let mut writer = Writer::new(DOCUMENT_BLOCK_MAGIC);
+/// A run of documents, each with its metadata and its text: what a result needs to be shown.
+pub(super) fn encode_page(start: u32, documents: &[(&DocumentMeta, &str)]) -> Vec<u8> {
+    let mut writer = Writer::new(PAGE_MAGIC);
     writer.u32(start);
     writer.u32(documents.len() as u32);
-    for document in documents {
+    for (document, content) in documents {
         encode_document(&mut writer, document);
+        writer.string(content);
     }
     writer.finish()
 }
 
-pub(crate) fn decode_document_block(bytes: &[u8]) -> Result<(u32, Vec<DocumentMeta>), String> {
-    let mut reader = Reader::new(bytes, DOCUMENT_BLOCK_MAGIC)?;
+pub(crate) fn decode_page(bytes: &[u8]) -> Result<(u32, Vec<(DocumentMeta, String)>), String> {
+    let mut reader = Reader::new(bytes, PAGE_MAGIC)?;
     let start = reader.u32()?;
     let count = reader.u32()? as usize;
     let mut documents = Vec::with_capacity(count);
     for _ in 0..count {
-        documents.push(decode_document(&mut reader)?);
+        let document = decode_document(&mut reader)?;
+        documents.push((document, reader.string()?));
     }
     reader.finish()?;
     Ok((start, documents))
-}
-
-pub(super) fn encode_lexicon_block(entries: &[(String, u32)]) -> Vec<u8> {
-    let mut writer = Writer::new(LEXICON_BLOCK_MAGIC);
-    writer.u32(entries.len() as u32);
-    let mut previous = String::new();
-    for (term, chunk) in entries {
-        let prefix = term
-            .char_indices()
-            .zip(previous.char_indices())
-            .take_while(|((_, left), (_, right))| left == right)
-            .last()
-            .map(|((index, character), _)| index + character.len_utf8())
-            .unwrap_or(0);
-        writer.var_u32(prefix as u32);
-        writer.string(&term[prefix..]);
-        writer.var_u32(*chunk);
-        previous.clone_from(term);
-    }
-    writer.finish()
-}
-
-pub(crate) fn decode_lexicon_block(bytes: &[u8]) -> Result<Vec<(String, u32)>, String> {
-    let mut reader = Reader::new(bytes, LEXICON_BLOCK_MAGIC)?;
-    let count = reader.u32()? as usize;
-    let mut entries = Vec::with_capacity(count);
-    let mut previous = String::new();
-    for _ in 0..count {
-        let prefix = reader.var_u32()? as usize;
-        if prefix > previous.len() || !previous.is_char_boundary(prefix) {
-            return Err("invalid lexicon prefix".to_string());
-        }
-        let term = format!("{}{}", &previous[..prefix], reader.string()?);
-        let chunk = reader.var_u32()?;
-        previous.clone_from(&term);
-        entries.push((term, chunk));
-    }
-    reader.finish()?;
-    Ok(entries)
 }
 
 pub(super) fn encode_postings(entries: &[(String, Vec<Posting>)]) -> Vec<u8> {
@@ -486,38 +475,15 @@ pub(crate) fn decode_postings(bytes: &[u8]) -> Result<Vec<(String, Vec<Posting>)
     Ok(entries)
 }
 
-pub(super) fn encode_content(entries: &[(u32, String)]) -> Vec<u8> {
-    let mut writer = Writer::new(CONTENT_MAGIC);
-    writer.u32(entries.len() as u32);
-    for (document, content) in entries {
-        writer.u32(*document);
-        writer.string(content);
-    }
-    writer.finish()
-}
-
-pub(crate) fn decode_content(bytes: &[u8]) -> Result<Vec<(u32, String)>, String> {
-    let mut reader = Reader::new(bytes, CONTENT_MAGIC)?;
-    let count = reader.u32()? as usize;
-    let mut entries = Vec::with_capacity(count);
-    for _ in 0..count {
-        entries.push((reader.u32()?, reader.string()?));
-    }
-    reader.finish()?;
-    Ok(entries)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{decode_lexicon_block, encode_lexicon_block};
+    use super::{decode_postings, encode_postings};
+    use crate::document::Posting;
 
     #[test]
     fn decoder_rejects_trailing_bytes() {
-        let mut bytes = encode_lexicon_block(&[("示例".to_string(), 0)]);
+        let mut bytes = encode_postings(&[("示例".to_string(), vec![Posting { document: 0, title_hits: 1, body_hits: 0 }])]);
         bytes.push(0);
-        assert_eq!(
-            decode_lexicon_block(&bytes).unwrap_err(),
-            "trailing bytes in search artifact"
-        );
+        assert_eq!(decode_postings(&bytes).unwrap_err(), "trailing bytes in search artifact");
     }
 }

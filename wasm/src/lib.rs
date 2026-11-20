@@ -19,72 +19,22 @@ impl SearchEngine {
         Ok(Self { inner: SearchSession::new(index, index_bytes, profile_json).map_err(js_error)? })
     }
 
-    pub fn load_lexicon_block(
-        &mut self,
-        block: u32,
-        bytes: &[u8],
-        decoded_bytes: u32,
-    ) -> Result<(), JsValue> {
-        self.inner
-            .load_lexicon_block(block, bytes, decoded_bytes)
-            .map_err(js_error)
+    pub fn load_postings_chunk(&mut self, chunk: u32, bytes: &[u8], decoded_bytes: u32) -> Result<(), JsValue> {
+        self.inner.load_postings_chunk(chunk, bytes, decoded_bytes).map_err(js_error)
     }
 
-    pub fn load_document_block(
-        &mut self,
-        block: u32,
-        bytes: &[u8],
-        decoded_bytes: u32,
-    ) -> Result<(), JsValue> {
-        self.inner
-            .load_document_block(block, bytes, decoded_bytes)
-            .map_err(js_error)
+    pub fn load_page(&mut self, page: u32, bytes: &[u8], decoded_bytes: u32) -> Result<(), JsValue> {
+        self.inner.load_page(page, bytes, decoded_bytes).map_err(js_error)
     }
 
-    pub fn load_postings_chunk(
-        &mut self,
-        chunk: u32,
-        bytes: &[u8],
-        decoded_bytes: u32,
-    ) -> Result<(), JsValue> {
-        self.inner
-            .load_postings_chunk(chunk, bytes, decoded_bytes)
-            .map_err(js_error)
-    }
-
-    pub fn load_content_chunk(
-        &mut self,
-        chunk: u32,
-        bytes: &[u8],
-        decoded_bytes: u32,
-    ) -> Result<(), JsValue> {
-        self.inner
-            .load_content_chunk(chunk, bytes, decoded_bytes)
-            .map_err(js_error)
-    }
-
-    pub fn clear_content(&mut self) {
-        self.inner.clear_content();
-    }
-
+    /// Prepares a query; returns the postings chunks to load.
     pub fn begin_search(&mut self, request_json: &str) -> Result<String, JsValue> {
         self.inner.begin_search(request_json).map_err(js_error)
     }
 
-    pub fn required_posting_chunks(&self) -> Result<String, JsValue> {
-        self.inner.required_posting_chunks().map_err(js_error)
-    }
-
+    /// Ranks the query; returns the pages to load for the requested results.
     pub fn plan_search(&mut self) -> Result<String, JsValue> {
         self.inner.plan_search().map_err(js_error)
-    }
-
-    pub fn ranked_results(&self) -> Result<String, JsValue> {
-        self.inner.ranked_results().map_err(js_error)
-    }
-
-    pub fn required_content_chunks(&self) -> Result<String, JsValue> {
-        self.inner.required_content_chunks().map_err(js_error)
     }
 
     pub fn hydrate_search(&self) -> Result<String, JsValue> {
