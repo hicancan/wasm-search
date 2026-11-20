@@ -82,7 +82,7 @@ the cost of whole packs. Hosts drive this through the engine: `beginSearch` name
 the postings blocks, `planSearch` the pages, and `hydrateSearch` returns the results.
 
 A profile may name `quiet_sources`: sources that publish many small items, such as job
-posts. They are still found, but within one relevance band, or one day when browsing by
+posts. They are still found, but within one relevance band, or one week when browsing by
 date, they come after everything else, so they never crowd a page.
 
 ## Pinyin

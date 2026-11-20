@@ -260,9 +260,8 @@ fn quiet_sources_come_after_the_rest_within_a_band_and_within_a_day() {
         let (engine, plan) = lazy_page(&bundle, &request(query));
         engine.hydrate_results(&plan, 0, 10).expect("results").results.into_iter().map(|result| result.id).collect::<Vec<_>>()
     };
-    let newest = browse("");
-    assert_eq!(newest[0], "notice");
-    assert_eq!(newest.last().map(String::as_str), Some("older"));
+    // 2026-11-16 to 22 is one week: the office's notices of that week come before the board's posts.
+    assert_eq!(browse(""), vec!["notice", "older", "job-1", "job-2"]);
     assert_eq!(browse("工程")[0], "notice");
 }
 

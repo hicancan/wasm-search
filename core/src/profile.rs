@@ -8,7 +8,7 @@ pub struct Profile {
     #[serde(default)]
     pub aliases: Vec<Alias>,
     /// Sources that publish many small items (job posts, say): within one
-    /// relevance band, or one day when browsing by date, they come after the rest.
+    /// relevance band, or one week when browsing by date, they come after the rest.
     /// They are still found; they just do not crowd out everything else.
     #[serde(default)]
     pub quiet_sources: Vec<String>,

@@ -74,7 +74,7 @@ export interface Alias {
 
 export interface Profile {
     aliases: Alias[];
-    /** Sources that publish many small items: after the rest within a relevance band, or a day when browsing. */
+    /** Sources that publish many small items: after the rest within a relevance band, or a week when browsing. */
     quiet_sources?: string[];
 }
 

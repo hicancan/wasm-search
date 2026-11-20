@@ -20,6 +20,8 @@ pub struct SearchEngine {
     sources: Vec<String>,
     /// By source position: whether the profile names it quiet.
     quiet: Vec<bool>,
+    /// By date position: the week it falls in, counted from 1970-01-05 (a Monday).
+    weeks: Vec<i64>,
     categories: Vec<String>,
     dates: Vec<String>,
     entities: Vec<String>,
@@ -141,9 +143,11 @@ impl SearchEngine {
         let BundleIndex { sources, categories, dates, entities, rows, page_starts, filter_options, postings_firsts, tables } =
             decode_index(&decompress_artifact(index, index_bytes)?)?;
         let quiet = sources.iter().map(|source| profile.quiet_sources.contains(source)).collect();
+        let weeks = dates.iter().map(|date| week_of(date)).collect();
         Ok(Self {
             profile,
             quiet,
+            weeks,
             sources,
             categories,
             dates,
@@ -548,6 +552,13 @@ impl SearchEngine {
         QueryPlan { query: String::new(), total_candidates: ranked.len(), ranked }
     }
 
+    fn week(&self, document: u32) -> i64 {
+        match self.rows[document as usize].date {
+            0 => i64::MIN,
+            date => self.weeks[date as usize - 1],
+        }
+    }
+
     fn is_quiet(&self, document: u32) -> bool {
         self.quiet[self.rows[document as usize].source as usize]
     }
@@ -568,9 +579,12 @@ impl SearchEngine {
                     .then_with(|| right.score.total_cmp(&left.score))
                     .then_with(|| left.document.cmp(&right.document))
             }),
+            // Newest first, by week: within a week quiet sources follow the rest, so a board posting dozens a day
+            // cannot fill the page ahead of that week's notices.
             SortMode::DateDesc => ranked.sort_by(|left, right| {
-                self.rows[right.document as usize].date.cmp(&self.rows[left.document as usize].date)
+                self.week(right.document).cmp(&self.week(left.document))
                     .then_with(|| self.is_quiet(left.document).cmp(&self.is_quiet(right.document)))
+                    .then_with(|| self.rows[right.document as usize].date.cmp(&self.rows[left.document as usize].date))
                     .then_with(|| right.tier.cmp(&left.tier))
                     .then_with(|| right.score.total_cmp(&left.score))
                     .then_with(|| left.document.cmp(&right.document))
@@ -702,9 +716,30 @@ fn valid_iso_date(value: &str) -> bool {
     (1..=max_day).contains(&day)
 }
 
+/// Weeks since Monday 1970-01-05 for a `YYYY-MM-DD` date (days from the civil calendar, Howard Hinnant's method).
+fn week_of(date: &str) -> i64 {
+    let mut parts = date.splitn(3, '-').map(|part| part.parse::<i64>().unwrap_or(0));
+    let (year, month, day) = (parts.next().unwrap_or(1970), parts.next().unwrap_or(1), parts.next().unwrap_or(1));
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let of_era = year - era * 400;
+    let of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let of_era_days = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
+    let days = era * 146_097 + of_era_days - 719_468;
+    (days - 4).div_euclid(7)
+}
+
 #[cfg(test)]
 mod tests {
     use super::valid_iso_date;
+
+    #[test]
+    fn weeks_run_monday_to_sunday() {
+        assert_eq!(super::week_of("2026-11-16"), super::week_of("2026-11-22"));
+        assert_eq!(super::week_of("2026-11-23"), super::week_of("2026-11-22") + 1);
+        assert_eq!(super::week_of("1970-01-05"), 0);
+        assert_eq!(super::week_of("1970-01-04"), -1);
+    }
 
     #[test]
     fn validates_real_calendar_dates() {
