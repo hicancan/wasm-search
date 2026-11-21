@@ -54,9 +54,14 @@ export class ArtifactSource {
     private activeReads = 0;
     private readonly waitingReads: Array<() => void> = [];
 
-    constructor(baseUrl: string, cache: CacheStore) {
+    constructor(baseUrl: string, cache: CacheStore, manifest?: SearchBundleManifest) {
         this.baseUrl = baseUrl.replace(/\/+$/, '');
         this.cache = cache;
+        if (manifest) this.manifestRequest = Promise.resolve().then(() => {
+            const value = parseManifest(manifest);
+            void this.prune(value);
+            return value;
+        });
     }
 
     manifest(signal?: AbortSignal): Promise<SearchBundleManifest> {
@@ -132,10 +137,14 @@ export class ArtifactSource {
         if (!path) return Promise.reject(new Error(`search bundle pack does not exist: ${pack}`));
         const start = first.offset;
         const end = Math.max(...group.map(reference => reference.offset + reference.bytes));
-        const range = `bytes=${start}-${end - 1}`;
+        // The compiler writes each index to its own file. A normal GET can
+        // reuse an HTTP preload while postings and pages keep using ranges.
+        const whole = group.length === 1 && start === 0 && [manifest.index, ...(manifest.segments ?? [])]
+            .some(index => index.pack === pack && index.offset === start && index.bytes === first.bytes);
+        const range = whole ? undefined : `bytes=${start}-${end - 1}`;
         const decode = async (response: Response) => {
             const body = await response.arrayBuffer();
-            const window = response.status === 206 ? body : body.slice(start, end);
+            const window = whole || response.status === 206 ? body : body.slice(start, end);
             if (window.byteLength !== end - start) throw new Error(`truncated ${path}`);
             return group.map(reference => window.slice(reference.offset - start, reference.offset - start + reference.bytes));
         };
@@ -203,7 +212,9 @@ export class ArtifactSource {
             for (let attempt = 0; ; attempt++) {
                 signal?.throwIfAborted();
                 try {
-                    const response = await fetch(url, { signal, headers: range ? { Range: range } : undefined });
+                    // The HTTP cache can serialize concurrent partial reads of
+                    // one URL. Cache Storage already keeps each block separately.
+                    const response = await fetch(url, { signal, ...(range ? { headers: { Range: range }, cache: 'no-store' } : {}) });
                     if (!response.ok) throw new Error(`failed to load ${url.split('?')[0]} (${response.status})`);
                     return await decode(response);
                 } catch (error) {

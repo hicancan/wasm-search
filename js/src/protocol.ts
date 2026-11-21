@@ -1,4 +1,5 @@
 import type { FilterOptions, Query, SearchResponse } from './model.js';
+import type { SearchBundleManifest } from './artifacts.js';
 
 export type SearchWorkerRequest =
     | {
@@ -6,6 +7,7 @@ export type SearchWorkerRequest =
         baseUrl: string;
         cacheBudgetBytes: number;
         workingSetBudgetBytes: number;
+        manifest?: SearchBundleManifest;
     }
     | {
         type: 'search';

@@ -1,4 +1,5 @@
 export { SEARCH_BUNDLE_FORMAT } from './artifacts.js';
+export type { SearchBundleManifest } from './artifacts.js';
 export { SearchClient } from './client.js';
 export type { SearchClientOptions, SearchClientReady } from './client.js';
 export type {

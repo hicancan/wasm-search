@@ -28,6 +28,7 @@ async function handle(request: Exclude<SearchWorkerRequest, { type: 'cancel' }>)
             new ArtifactSource(
                 request.baseUrl,
                 new CacheStore(request.cacheBudgetBytes),
+                request.manifest,
             ),
             request.workingSetBudgetBytes,
         );

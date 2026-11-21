@@ -1,5 +1,6 @@
 import type { FilterOptions, Query, SearchResponse } from './model.js';
 import type { SearchWorkerRequest, SearchWorkerResponse } from './protocol.js';
+import type { SearchBundleManifest } from './artifacts.js';
 
 export interface SearchClientReady {
     documentCount: number;
@@ -20,11 +21,13 @@ export interface SearchClientOptions {
     baseUrl: string;
     cacheBudgetBytes?: number;
     workingSetBudgetBytes?: number;
+    /** Manifest for this exact immutable base URL, when already known by the host. */
+    manifest?: SearchBundleManifest;
 }
 
 export class SearchClient {
     private worker: Worker | null = null;
-    private readonly options: Required<SearchClientOptions>;
+    private readonly options: Required<Omit<SearchClientOptions, 'manifest'>> & Pick<SearchClientOptions, 'manifest'>;
     private state: ClientState = 'idle';
     private readyPromise: Promise<SearchClientReady> | null = null;
     private readyValue: SearchClientReady | null = null;
@@ -40,6 +43,7 @@ export class SearchClient {
             baseUrl,
             cacheBudgetBytes: options.cacheBudgetBytes ?? 64 * MIB,
             workingSetBudgetBytes: options.workingSetBudgetBytes ?? 48 * MIB,
+            ...(options.manifest ? { manifest: options.manifest } : {}),
         };
     }
 

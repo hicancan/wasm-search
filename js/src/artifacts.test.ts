@@ -18,17 +18,27 @@ afterEach(() => {
 });
 
 describe('ArtifactSource', () => {
-    it('reads a block by byte range from its pack and caches it', async () => {
+    it('reads a block by byte range without queuing it in the HTTP cache', async () => {
         const fetchMock = serve(() => ranged());
         vi.stubGlobal('fetch', fetchMock);
         const source = new ArtifactSource('https://data.test/data/search/', new CacheStore(1024));
 
-        await source.bytes(reference);
-        await source.bytes(reference);
+        const block = { ...reference, offset: 12 };
+        await source.bytes(block);
+        await source.bytes(block);
 
         const calls = packCalls(fetchMock);
         expect(calls).toHaveLength(1);
-        expect(calls[0]).toEqual(['https://data.test/data/search/pack-000.bin', expect.objectContaining({ headers: { Range: 'bytes=0-2' } })]);
+        expect(calls[0]).toEqual(['https://data.test/data/search/pack-000.bin', expect.objectContaining({ headers: { Range: 'bytes=12-14' }, cache: 'no-store' })]);
+    });
+
+    it('reads a preloaded index as a whole file using its supplied manifest', async () => {
+        const fetchMock = serve(() => new Response(bytes));
+        vi.stubGlobal('fetch', fetchMock);
+        const source = new ArtifactSource('https://data.test/s', new CacheStore(1024), manifest);
+        expect(await source.bytes(reference)).toEqual(bytes.buffer);
+        expect(fetchMock.mock.calls).toHaveLength(1);
+        expect(fetchMock.mock.calls[0]).toEqual(['https://data.test/s/pack-000.bin', { signal: undefined }]);
     });
 
     it('reads neighbouring blocks of one pack with one range and splits them', async () => {

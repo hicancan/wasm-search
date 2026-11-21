@@ -24,12 +24,14 @@ export class SearchRuntime {
         documentCount: number;
         filterOptions: FilterOptions;
     }> {
-        const [, manifest] = await Promise.all([initWasm(), this.source.manifest(signal)]);
-        const refs = [manifest.index, ...(manifest.segments ?? [])];
-        if (refs.reduce((sum, ref) => sum + ref.decoded_bytes, 0) > this.workingSetBudgetBytes) {
-            throw new Error('search index exceeds the search memory budget');
-        }
-        const indexes = await this.source.blocks(refs, signal);
+        const data = this.source.manifest(signal).then(async manifest => {
+            const refs = [manifest.index, ...(manifest.segments ?? [])];
+            if (refs.reduce((sum, ref) => sum + ref.decoded_bytes, 0) > this.workingSetBudgetBytes) {
+                throw new Error('search index exceeds the search memory budget');
+            }
+            return { manifest, indexes: await this.source.blocks(refs, signal) };
+        });
+        const [{ manifest, indexes }] = await Promise.all([data, initWasm()]);
         signal?.throwIfAborted();
         this.manifestValue = manifest;
         this.indexes = indexes;
