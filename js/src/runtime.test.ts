@@ -23,7 +23,7 @@ vi.mock('../wasm/wasm_search_wasm.js', () => ({
 import { SearchRuntime } from './runtime.js';
 
 const manifest: SearchBundleManifest = {
-    format: 'wasm-search-bundle-v5',
+    format: 'wasm-search-bundle-v6',
     index: { pack: 0, offset: 0, bytes: 4, decoded_bytes: 4 },
     packs: ['pack-000.bin', 'pack-001.bin', 'pack-002.bin'],
     profile: { aliases: [] },
@@ -49,7 +49,7 @@ describe('SearchRuntime', () => {
         const runtime = new SearchRuntime(fake as never, 1024);
         await runtime.initialize();
         await expect(runtime.search(query)).resolves.toEqual({ totalCandidates: 2, results: [{ id: 'first', snippet: '正文摘要' }] });
-        expect(fake.blocks.mock.calls.map(([references]) => references.map((reference: BlockRef) => reference.pack))).toEqual([[1], [2]]);
+        expect(fake.blocks.mock.calls.map(([references]) => references.map((reference: BlockRef) => reference.pack))).toEqual([[0], [1], [2]]);
         expect(engine.loadedPages).toHaveBeenCalledTimes(1);
         runtime.dispose();
     });

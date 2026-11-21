@@ -119,7 +119,7 @@ pub fn compile_search_bundle_with(
     if documents.is_empty() {
         return Err("cannot build a search bundle from no documents".to_string());
     }
-    // Document numbers follow ids, so the last ranking tie-break needs no stored id.
+    // Physical document numbers are local to the segment.
     documents.sort_by(|left, right| left.id.cmp(&right.id));
 
     let metas: Vec<DocumentMeta> = documents
@@ -241,18 +241,6 @@ pub fn compile_search_bundle_with(
         list.sort();
         list.dedup();
     }
-    // Group numbers are serialized into the index. Assign them in URL order,
-    // so separate builds of the same documents produce the same byte ranges.
-    let mut url_uses: BTreeMap<&str, u32> = BTreeMap::new();
-    for document in &metas {
-        *url_uses.entry(document.url.as_str()).or_default() += 1;
-    }
-    let url_groups: HashMap<&str, u32> = url_uses
-        .into_iter()
-        .filter(|(_, uses)| *uses > 1)
-        .enumerate()
-        .map(|(group, (url, _))| (url, group as u32 + 1))
-        .collect();
     // A category or date of zero means none, so dates compare as they sort.
     let position = |list: &[String], value: &str| list.binary_search_by(|item| item.as_str().cmp(value)).expect("listed") as u32;
     let mut entities: Vec<String> = documents.iter().flat_map(|document| document.within.iter().cloned()).collect();
@@ -267,7 +255,8 @@ pub fn compile_search_bundle_with(
             date: document.published_at.as_deref().map_or(0, |value| position(&dates, value) + 1),
             kind: document.kind,
             title: normalize_text(&document.title),
-            url_group: url_groups.get(document.url.as_str()).copied().unwrap_or(0),
+            id: document.id.clone(),
+            url: document.url.clone(),
             within: source.within.iter().map(|entity| position(&entities, entity)).collect(),
         })
         .collect();
@@ -290,6 +279,7 @@ pub fn compile_search_bundle_with(
     let manifest = SearchBundleManifest {
         format: SEARCH_BUNDLE_FORMAT.to_string(),
         index: index_ref,
+        segments: Vec::new(),
         packs: (0..packs.len()).map(|pack| format!("pack-{pack:03}.bin")).collect(),
         mirrors: Vec::new(),
         profile,

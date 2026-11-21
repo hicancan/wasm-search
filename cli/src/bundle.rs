@@ -25,6 +25,9 @@ pub fn load_engine(bundle: &Path) -> Result<SearchEngine> {
         manifest.profile.clone(),
     )
     .map_err(anyhow::Error::msg)?;
+    for part in &manifest.segments {
+        engine.add_segment(&read(bundle, &manifest, *part)?, part.decoded_bytes, part.pack).map_err(anyhow::Error::msg)?;
+    }
     let tables = engine.tables().clone();
     for (index, artifact) in tables.postings.iter().enumerate() {
         engine.load_postings_chunk(index as u32, &read(bundle, &manifest, *artifact)?, artifact.decoded_bytes).map_err(anyhow::Error::msg)?;

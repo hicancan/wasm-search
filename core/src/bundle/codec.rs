@@ -2,7 +2,7 @@ use super::model::{ArtifactRef, BlockTables};
 use crate::document::{Attachment, DocumentKind, DocumentMeta, Posting};
 use crate::query::{FilterOption, FilterOptions};
 
-const INDEX_MAGIC: &[u8; 8] = b"WSINDX05";
+const INDEX_MAGIC: &[u8; 8] = b"WSINDX06";
 const PAGE_MAGIC: &[u8; 8] = b"WSPAGE05";
 const POSTINGS_MAGIC: &[u8; 8] = b"WSPOST01";
 
@@ -240,7 +240,6 @@ fn decode_filter_options(reader: &mut Reader<'_>) -> Result<FilterOptions, Strin
 }
 
 /// What ranking needs to know about one document; everything else waits for the page.
-/// `url_group` is zero for a URL used once, otherwise shared by the documents using it.
 #[derive(Clone, Debug)]
 pub struct RankRow {
     pub source: u32,
@@ -248,7 +247,8 @@ pub struct RankRow {
     pub date: u32,
     pub kind: DocumentKind,
     pub title: String,
-    pub url_group: u32,
+    pub id: String,
+    pub url: String,
     /// Positions in `BundleIndex::entities`.
     pub within: Vec<u32>,
 }
@@ -343,7 +343,8 @@ pub(super) fn encode_index(index: &BundleIndex) -> Vec<u8> {
         writer.var_u32(row.date);
         writer.u8(encode_kind(row.kind));
         writer.string(&row.title);
-        writer.var_u32(row.url_group);
+        writer.string(&row.id);
+        writer.string(&row.url);
         writer.var_u32(row.within.len() as u32);
         for entity in &row.within {
             writer.var_u32(*entity);
@@ -378,13 +379,14 @@ pub(crate) fn decode_index(bytes: &[u8]) -> Result<BundleIndex, String> {
         let date = reader.var_u32()?;
         let kind = decode_kind(reader.u8()?)?;
         let title = reader.string()?;
-        let url_group = reader.var_u32()?;
+        let id = reader.string()?;
+        let url = reader.string()?;
         let belongs = reader.var_u32()? as usize;
         let mut within = Vec::with_capacity(belongs);
         for _ in 0..belongs {
             within.push(reader.var_u32()?);
         }
-        rows.push(RankRow { source, category, date, kind, title, url_group, within });
+        rows.push(RankRow { source, category, date, kind, title, id, url, within });
     }
     let count = reader.var_u32()? as usize;
     let mut page_starts = Vec::with_capacity(count);

@@ -865,3 +865,46 @@ fn within_finds_a_document_through_any_entity_that_contains_it() {
     words.filters.within = Some("园区".to_string());
     assert_eq!(total(&bundle, &words), 1);
 }
+
+#[test]
+fn separate_segments_preserve_global_search_and_facets() {
+    let mut docs = categorized(documents());
+    let mut repost = docs[0].clone();
+    repost.id = "doc-0".to_string();
+    repost.source = "www".to_string();
+    repost.source_name = "主页".to_string();
+    docs.push(repost);
+    let single = compile_search_bundle(docs.clone(), Profile::default()).unwrap();
+    let delta = compile_search_bundle(docs.split_off(3), Profile::default()).unwrap();
+    let base = compile_search_bundle(docs, Profile::default()).unwrap();
+    let mut unified = index_engine(&single);
+    let mut segmented = index_engine(&base);
+    let index = delta.manifest.index;
+    let offset = base.packs.len() as u32;
+    segmented.add_segment(delta.read(index), index.decoded_bytes, offset).unwrap();
+    for (engine, parts) in [(&mut unified, vec![&single]), (&mut segmented, vec![&base, &delta])] {
+        let tables = engine.tables().clone();
+        let read = |reference: wasm_search_core::ArtifactRef| {
+            if reference.pack < offset || parts.len() == 1 {
+                parts[0].read(reference)
+            } else {
+                parts[1].read(wasm_search_core::ArtifactRef { pack: reference.pack - offset, ..reference })
+            }
+        };
+        for (id, block) in tables.postings.into_iter().enumerate() {
+            engine.load_postings_chunk(id as u32, read(block), block.decoded_bytes).unwrap();
+        }
+        for (id, block) in tables.pages.into_iter().enumerate() {
+            engine.load_page(id as u32, read(block), block.decoded_bytes).unwrap();
+        }
+    }
+    assert_eq!(serde_json::to_value(unified.filter_options()).unwrap(),
+        serde_json::to_value(segmented.filter_options()).unwrap());
+    for query in ["", "转专业", "社区新闻", "专业建设"] {
+        for sort in [SortMode::Relevance, SortMode::DateDesc] {
+            let request = Query { query: query.into(), offset: 0, limit: 3, sort, filters: Default::default() };
+            assert_eq!(serde_json::to_value(unified.search(&request).unwrap()).unwrap(),
+                serde_json::to_value(segmented.search(&request).unwrap()).unwrap(), "{query}");
+        }
+    }
+}

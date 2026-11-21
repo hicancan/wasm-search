@@ -25,6 +25,10 @@ impl SearchEngine {
         Ok(Self { inner: SearchSession::new(index, index_bytes, profile_json).map_err(js_error)? })
     }
 
+    pub fn add_segment(&mut self, index: &[u8], index_bytes: u32, pack_offset: u32) -> Result<(), JsValue> {
+        self.inner.add_segment(index, index_bytes, pack_offset).map_err(js_error)
+    }
+
     pub fn load_postings_chunk(&mut self, chunk: u32, bytes: &[u8], decoded_bytes: u32) -> Result<(), JsValue> {
         self.inner.load_postings_chunk(chunk, bytes, decoded_bytes).map_err(js_error)
     }

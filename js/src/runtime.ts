@@ -7,7 +7,7 @@ export class SearchRuntime {
     private readonly source: ArtifactSource;
     private readonly workingSetBudgetBytes: number;
     private manifestValue: SearchBundleManifest | null = null;
-    private index: ArrayBuffer | null = null;
+    private indexes: ArrayBuffer[] = [];
     private engine: WasmSearchEngine | null = null;
     private loadedBytes = 0;
 
@@ -25,13 +25,14 @@ export class SearchRuntime {
         filterOptions: FilterOptions;
     }> {
         const [, manifest] = await Promise.all([initWasm(), this.source.manifest(signal)]);
-        if (manifest.index.decoded_bytes > this.workingSetBudgetBytes) {
+        const refs = [manifest.index, ...(manifest.segments ?? [])];
+        if (refs.reduce((sum, ref) => sum + ref.decoded_bytes, 0) > this.workingSetBudgetBytes) {
             throw new Error('search index exceeds the search memory budget');
         }
-        const index = await this.source.bytes(manifest.index, signal);
+        const indexes = await this.source.blocks(refs, signal);
         signal?.throwIfAborted();
         this.manifestValue = manifest;
-        this.index = index;
+        this.indexes = indexes;
         this.resetEngine();
         return {
             manifest,
@@ -46,14 +47,18 @@ export class SearchRuntime {
     }
 
     private resetEngine(): void {
-        if (!this.index || !this.manifestValue) throw new Error('search index is not loaded');
+        if (!this.indexes.length || !this.manifestValue) throw new Error('search index is not loaded');
         this.engine?.free();
         this.engine = new WasmSearchEngine(
-            new Uint8Array(this.index),
+            new Uint8Array(this.indexes[0]!),
             this.manifestValue.index.decoded_bytes,
             JSON.stringify(this.manifestValue.profile),
         );
         this.loadedBytes = this.manifestValue.index.decoded_bytes;
+        for (const [index, part] of (this.manifestValue.segments ?? []).entries()) {
+            this.engine.add_segment(new Uint8Array(this.indexes[index + 1]!), part.decoded_bytes, part.pack);
+            this.loadedBytes += part.decoded_bytes;
+        }
     }
 
     private async load(json: string, consume: (id: number, bytes: Uint8Array, decoded: number) => void, signal?: AbortSignal): Promise<void> {
@@ -84,7 +89,7 @@ export class SearchRuntime {
         this.engine?.free();
         this.engine = null;
         this.manifestValue = null;
-        this.index = null;
+        this.indexes = [];
         this.loadedBytes = 0;
     }
 }

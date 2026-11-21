@@ -27,6 +27,11 @@ impl SearchSession {
         })
     }
 
+    pub fn add_segment(&mut self, index: &[u8], index_bytes: u32, pack_offset: u32) -> Result<(), String> {
+        if self.plan_request.is_some() { return Err("add segments before beginning a query".into()); }
+        self.inner.add_segment(index, index_bytes.into(), pack_offset)
+    }
+
     pub fn load_postings_chunk(&mut self, chunk: u32, bytes: &[u8], decoded_bytes: u32) -> Result<(), String> {
         self.inner.load_postings_chunk(chunk, bytes, decoded_bytes.into()).map_err(message)
     }

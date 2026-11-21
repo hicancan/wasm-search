@@ -1,5 +1,5 @@
 use super::model::{
-    FilterOptions, Query, SearchAttachment, SearchResponse, SearchResult, SortMode,
+    FilterOption, FilterOptions, Query, SearchAttachment, SearchResponse, SearchResult, SortMode,
 };
 use super::ranking::posting_score;
 use super::snippet::{build_snippet, highlight_ranges};
@@ -10,7 +10,7 @@ use crate::bundle::{
 };
 use crate::document::{DocumentKind, DocumentMeta, Posting};
 use crate::profile::Profile;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 const PARTIAL_FALLBACK_FLOOR: usize = 20;
 const MAX_QUERY_LIMIT: usize = 1_000;
@@ -32,9 +32,44 @@ pub struct SearchEngine {
     page_starts: Vec<u32>,
     loaded_pages: BTreeSet<u32>,
     filter_options: FilterOptions,
-    postings_firsts: Vec<String>,
+    posting_segments: Vec<PostingSegment>,
+    page_segments: Vec<(usize, u32)>,
     postings: HashMap<String, Vec<Posting>>,
     loaded_posting_chunks: BTreeSet<u32>,
+}
+
+struct PostingSegment {
+    firsts: Vec<String>,
+    first_chunk: usize,
+    first_document: u32,
+    end_document: u32,
+}
+
+impl PostingSegment {
+    fn chunk(&self, term: &str) -> Option<u32> {
+        let local = match self.firsts.binary_search_by(|key| key.as_str().cmp(term)) {
+            Ok(index) => index,
+            Err(0) => return None,
+            Err(index) => index - 1,
+        };
+        Some((self.first_chunk + local) as u32)
+    }
+}
+
+fn merge_values(base: &mut Vec<String>, next: &[String]) -> (Vec<u32>, Vec<u32>) {
+    let values: Vec<_> = base.iter().chain(next).cloned().collect::<BTreeSet<_>>().into_iter().collect();
+    let positions = |keys: &[String]| keys.iter().map(|key| values.binary_search(key).expect("merged") as u32).collect();
+    let remap = (positions(base), positions(next));
+    *base = values;
+    remap
+}
+
+fn merge_options(base: &mut Vec<FilterOption>, next: Vec<FilterOption>) {
+    let mut counts = BTreeMap::new();
+    for option in std::mem::take(base).into_iter().chain(next) {
+        *counts.entry((option.id, option.label)).or_insert(0) += option.count;
+    }
+    *base = counts.into_iter().map(|((id, label), count)| FilterOption { id, label, count }).collect();
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -144,6 +179,7 @@ impl SearchEngine {
             decode_index(&decompress_artifact(index, index_bytes)?)?;
         let quiet = sources.iter().map(|source| profile.quiet_sources.contains(source)).collect();
         let weeks = dates.iter().map(|date| week_of(date)).collect();
+        let end_document = rows.len() as u32;
         Ok(Self {
             profile,
             quiet,
@@ -159,10 +195,62 @@ impl SearchEngine {
             page_starts,
             loaded_pages: BTreeSet::new(),
             filter_options,
-            postings_firsts,
+            posting_segments: vec![PostingSegment { firsts: postings_firsts, first_chunk: 0, first_document: 0, end_document }],
+            page_segments: vec![(0, 0)],
             postings: HashMap::new(),
             loaded_posting_chunks: BTreeSet::new(),
         })
+    }
+
+    /// Connects a disjoint immutable segment before reading results. Block and document
+    /// numbers are local on disk; corpus statistics, filters, and URL collapse stay global.
+    pub fn add_segment(&mut self, index: &[u8], index_bytes: u64, pack_offset: u32) -> Result<(), String> {
+        if !self.loaded_pages.is_empty() || !self.loaded_posting_chunks.is_empty() {
+            return Err("add segments before reading search blocks".into());
+        }
+        let mut part = decode_index(&decompress_artifact(index, index_bytes)?)?;
+        let first_document = self.rows.len() as u32;
+        let end_document = first_document.checked_add(part.rows.len() as u32).ok_or("too many documents")?;
+        let (base_sources, part_sources) = merge_values(&mut self.sources, &part.sources);
+        let (base_categories, part_categories) = merge_values(&mut self.categories, &part.categories);
+        let (base_dates, part_dates) = merge_values(&mut self.dates, &part.dates);
+        let (base_entities, part_entities) = merge_values(&mut self.entities, &part.entities);
+        let remap = |rows: &mut [RankRow], sources: &[u32], categories: &[u32], dates: &[u32], entities: &[u32]| {
+            let nullable = |key: u32, map: &[u32]| if key > 0 { map[key as usize - 1] + 1 } else { 0 };
+            for row in rows {
+                row.source = sources[row.source as usize];
+                row.category = nullable(row.category, categories);
+                row.date = nullable(row.date, dates);
+                for entity in &mut row.within {
+                    *entity = entities[*entity as usize];
+                }
+            }
+        };
+        remap(&mut self.rows, &base_sources, &base_categories, &base_dates, &base_entities);
+        remap(&mut part.rows, &part_sources, &part_categories, &part_dates, &part_entities);
+        self.rows.extend(part.rows);
+        self.quiet = self.sources.iter().map(|source| self.profile.quiet_sources.contains(source)).collect();
+        self.weeks = self.dates.iter().map(|date| week_of(date)).collect();
+        self.page_segments.push((self.tables.pages.len(), first_document));
+        self.page_starts.extend(part.page_starts.into_iter().map(|start| start + first_document));
+        self.posting_segments.push(PostingSegment {
+            firsts: part.postings_firsts,
+            first_chunk: self.tables.postings.len(),
+            first_document,
+            end_document,
+        });
+        for (target, blocks) in [(&mut self.tables.pages, part.tables.pages), (&mut self.tables.postings, part.tables.postings)] {
+            target.extend(blocks.into_iter().map(|mut block| {
+                block.pack += pack_offset;
+                block
+            }));
+        }
+        merge_options(&mut self.filter_options.sources, part.filter_options.sources);
+        merge_options(&mut self.filter_options.categories, part.filter_options.categories);
+        for (source, options) in part.filter_options.categories_by_source {
+            merge_options(self.filter_options.categories_by_source.entry(source).or_default(), options);
+        }
+        Ok(())
     }
 
     pub fn document_count(&self) -> usize {
@@ -178,11 +266,13 @@ impl SearchEngine {
             return Err(format!("page does not exist: {page}"));
         };
         let (start, documents) = decode_page(&decompress_artifact(bytes, decoded_bytes)?)?;
-        if start != expected {
+        let (_, first_document) = self.page_segments.iter().rev()
+            .find(|(first_page, _)| *first_page <= page as usize).expect("first page");
+        if start.checked_add(*first_document) != Some(expected) {
             return Err(format!("page start does not match page {page}"));
         }
         for (offset, (document, content)) in documents.into_iter().enumerate() {
-            let index = start + offset as u32;
+            let index = expected + offset as u32;
             if index as usize >= self.rows.len() {
                 return Err("page exceeds document index".to_string());
             }
@@ -199,10 +289,22 @@ impl SearchEngine {
         bytes: &[u8],
         decoded_bytes: u64,
     ) -> Result<(), String> {
-        for (term, postings) in decode_postings(&decompress_artifact(bytes, decoded_bytes)?)? {
-            if self.postings.insert(term.clone(), postings).is_some() {
-                return Err(format!("duplicate term across postings chunks: {term}"));
+        if self.loaded_posting_chunks.contains(&chunk) { return Ok(()); }
+        let segment = self.posting_segments.iter().find(|part|
+            (part.first_chunk..part.first_chunk + part.firsts.len()).contains(&(chunk as usize))
+        ).ok_or_else(|| format!("postings chunk does not exist: {chunk}"))?;
+        let mut entries = decode_postings(&decompress_artifact(bytes, decoded_bytes)?)?;
+        for (term, postings) in &mut entries {
+            if segment.chunk(term) != Some(chunk) {
+                return Err(format!("term is in the wrong postings chunk: {term}"));
             }
+            for posting in postings {
+                posting.document = posting.document.checked_add(segment.first_document)
+                    .filter(|document| *document < segment.end_document).ok_or("posting exceeds its segment")?;
+            }
+        }
+        for (term, postings) in entries {
+            self.postings.entry(term).or_default().extend(postings);
         }
         self.loaded_posting_chunks.insert(chunk);
         Ok(())
@@ -218,12 +320,8 @@ impl SearchEngine {
 
     /// The postings chunk a term would be in. A term absent from the corpus names a chunk
     /// that turns out not to hold it, which costs one small read and finds nothing.
-    fn postings_chunk_for(&self, term: &str) -> Option<u32> {
-        match self.postings_firsts.binary_search_by(|first| first.as_str().cmp(term)) {
-            Ok(index) => Some(index as u32),
-            Err(0) => None,
-            Err(index) => Some(index as u32 - 1),
-        }
+    fn postings_chunks_for<'a>(&'a self, term: &'a str) -> impl Iterator<Item = u32> + 'a {
+        self.posting_segments.iter().filter_map(move |segment| segment.chunk(term))
     }
 
     fn refs(table: &[ArtifactRef], ids: impl IntoIterator<Item = u32>) -> Vec<BlockRef> {
@@ -237,7 +335,7 @@ impl SearchEngine {
             .analysis
             .retrieval_terms
             .iter()
-            .filter_map(|term| self.postings_chunk_for(term))
+            .flat_map(|term| self.postings_chunks_for(term))
             .filter(|chunk| !self.loaded_posting_chunks.contains(chunk))
             .collect();
         Self::refs(&self.tables.postings, ids)
@@ -438,7 +536,7 @@ impl SearchEngine {
         let missing = analysis
             .retrieval_terms
             .iter()
-            .filter_map(|term| self.postings_chunk_for(term))
+            .flat_map(|term| self.postings_chunks_for(term))
             .filter(|chunk| !self.loaded_posting_chunks.contains(chunk))
             .collect::<BTreeSet<_>>();
         if !missing.is_empty() {
@@ -577,7 +675,7 @@ impl SearchEngine {
                     })
                     .then_with(|| right.tier.cmp(&left.tier))
                     .then_with(|| right.score.total_cmp(&left.score))
-                    .then_with(|| left.document.cmp(&right.document))
+                    .then_with(|| self.rows[left.document as usize].id.cmp(&self.rows[right.document as usize].id))
             }),
             // Newest first, by week: within a week quiet sources follow the rest, so a board posting dozens a day
             // cannot fill the page ahead of that week's notices.
@@ -587,7 +685,7 @@ impl SearchEngine {
                     .then_with(|| self.rows[right.document as usize].date.cmp(&self.rows[left.document as usize].date))
                     .then_with(|| right.tier.cmp(&left.tier))
                     .then_with(|| right.score.total_cmp(&left.score))
-                    .then_with(|| left.document.cmp(&right.document))
+                    .then_with(|| self.rows[left.document as usize].id.cmp(&self.rows[right.document as usize].id))
             }),
         }
     }
@@ -598,7 +696,7 @@ impl SearchEngine {
         let mut seen_presentations = HashSet::new();
         ranked.retain(|candidate| {
             let row = &self.rows[candidate.document as usize];
-            if row.url_group != 0 && !seen_urls.insert(row.url_group) {
+            if !seen_urls.insert(row.url.as_str()) {
                 return false;
             }
             if row.date == 0 {

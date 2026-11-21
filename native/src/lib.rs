@@ -51,6 +51,10 @@ impl SearchEngine {
         })
     }
 
+    pub fn add_segment(&self, index: Vec<u8>, index_bytes: u32, pack_offset: u32) -> Result<(), SearchError> {
+        self.session().add_segment(&index, index_bytes, pack_offset).map_err(error)
+    }
+
     pub fn load_postings_chunk(&self, chunk: u32, bytes: Vec<u8>, decoded_bytes: u32) -> Result<(), SearchError> {
         self.session().load_postings_chunk(chunk, &bytes, decoded_bytes).map_err(error)
     }

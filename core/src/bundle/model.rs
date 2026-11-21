@@ -1,7 +1,7 @@
 use crate::profile::Profile;
 use serde::{Deserialize, Serialize};
 
-pub const SEARCH_BUNDLE_FORMAT: &str = "wasm-search-bundle-v5";
+pub const SEARCH_BUNDLE_FORMAT: &str = "wasm-search-bundle-v6";
 
 /// A byte range of a pack file, compressed on its own.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,6 +42,8 @@ impl BlockRef {
 pub struct SearchBundleManifest {
     pub format: String,
     pub index: ArtifactRef,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<ArtifactRef>,
     pub packs: Vec<String>,
     /// Faster addresses for the packs, by position. A host may add these after
     /// compiling; clients fall back to `packs` when one fails or has expired.

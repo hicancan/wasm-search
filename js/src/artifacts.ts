@@ -14,11 +14,12 @@ export interface BlockRef extends ArtifactRef {
 }
 
 /** The one bundle format this package reads: a host compares it with the format a data release names. */
-export const SEARCH_BUNDLE_FORMAT = 'wasm-search-bundle-v5';
+export const SEARCH_BUNDLE_FORMAT = 'wasm-search-bundle-v6';
 
 export interface SearchBundleManifest {
     format: typeof SEARCH_BUNDLE_FORMAT;
     index: ArtifactRef;
+    segments?: ArtifactRef[];
     packs: string[];
     /** Faster addresses for the packs, by position; `packs` remains the fallback. */
     mirrors?: string[];
@@ -42,14 +43,13 @@ const PERSISTENT_PREFIX = 'wasm-search ';
 
 /**
  * Fetches a bundle's files from one directory URL. Blocks are kept in an LRU byte cache and, where the
- * browser offers Cache Storage, persistently: a bundle is immutable, so a block read once is never read
- * from the network again until the bundle changes, and then the old bundle's cache is dropped.
+ * browser offers Cache Storage, persistently. A segment keeps its blocks when the bundle points to a new companion.
  */
 export class ArtifactSource {
     private readonly baseUrl: string;
     private readonly cache: CacheStore;
     private manifestRequest: Promise<SearchBundleManifest> | null = null;
-    private persistentCache: Promise<Cache | null> | null = null;
+    private readonly persistentCaches = new Map<string, Promise<Cache | null>>();
     private readonly requests = new Map<string, Promise<ArrayBuffer>>();
     private activeReads = 0;
     private readonly waitingReads: Array<() => void> = [];
@@ -60,7 +60,10 @@ export class ArtifactSource {
     }
 
     manifest(signal?: AbortSignal): Promise<SearchBundleManifest> {
-        this.manifestRequest ??= this.read(`${this.baseUrl}/manifest.json`, async response => parseManifest(await response.json()), signal).catch(error => {
+        this.manifestRequest ??= this.read(`${this.baseUrl}/manifest.json`, async response => parseManifest(await response.json()), signal).then(manifest => {
+            void this.prune(manifest);
+            return manifest;
+        }).catch(error => {
             this.manifestRequest = null;
             throw error;
         });
@@ -78,10 +81,9 @@ export class ArtifactSource {
      */
     async blocks(references: ArtifactRef[], signal?: AbortSignal): Promise<ArrayBuffer[]> {
         const manifest = await this.manifest(signal);
-        const persistent = await this.persistent();
         const key = (reference: ArtifactRef) => `${reference.pack}:${reference.offset}`;
         const found = new Map<string, Promise<ArrayBuffer>>();
-        const missing: ArtifactRef[] = [];
+        const missing = new Map<string, ArtifactRef>();
         for (const reference of references) {
             const id = key(reference);
             if (found.has(id)) continue;
@@ -89,11 +91,16 @@ export class ArtifactSource {
             if (cached) { found.set(id, Promise.resolve(cached)); continue; }
             const active = this.requests.get(id);
             if (active) { found.set(id, active); continue; }
-            missing.push(reference);
+            missing.set(id, reference);
         }
-        const stored = await Promise.all(missing.map(reference => persistent?.match(this.cacheUrl(manifest, reference)).then(response => response?.arrayBuffer()) ?? Promise.resolve(undefined)));
+        const cacheFor = (reference: ArtifactRef) => this.persistent(this.packUrl(manifest.packs[reference.pack]!));
+        const uncached = [...missing.values()];
+        const stored = await Promise.all(uncached.map(async reference => {
+            const response = await (await cacheFor(reference))?.match(this.cacheUrl(manifest, reference));
+            return response?.arrayBuffer();
+        }));
         const network: ArtifactRef[] = [];
-        missing.forEach((reference, index) => {
+        uncached.forEach((reference, index) => {
             const bytes = stored[index];
             if (bytes && bytes.byteLength === reference.bytes) {
                 this.cache.set(key(reference), bytes);
@@ -107,7 +114,7 @@ export class ArtifactSource {
                 const one = read.then(parts => {
                     const bytes = parts[index]!;
                     this.cache.set(id, bytes);
-                    void persistent?.put(this.cacheUrl(manifest, reference), new Response(bytes)).catch(() => undefined);
+                    void cacheFor(reference).then(cache => cache?.put(this.cacheUrl(manifest, reference), new Response(bytes))).catch(() => undefined);
                     return bytes;
                 }).finally(() => this.requests.delete(id));
                 this.requests.set(id, one);
@@ -132,33 +139,45 @@ export class ArtifactSource {
             if (window.byteLength !== end - start) throw new Error(`truncated ${path}`);
             return group.map(reference => window.slice(reference.offset - start, reference.offset - start + reference.bytes));
         };
+        const address = this.packUrl(path);
         const mirror = manifest.mirrors?.[pack];
-        if (!mirror) return this.read(`${this.baseUrl}/${path}`, decode, signal, range);
+        if (!mirror) return this.read(address, decode, signal, range);
         return this.read(mirror, decode, signal, range).catch(error => {
             if (signal?.aborted) throw error;
-            return this.read(`${this.baseUrl}/${path}`, decode, signal, range);
+            return this.read(address, decode, signal, range);
         });
     }
 
     private cacheUrl(manifest: SearchBundleManifest, reference: ArtifactRef): string {
-        return `${this.baseUrl}/${manifest.packs[reference.pack]}?block=${reference.offset}-${reference.bytes}`;
+        return this.packUrl(manifest.packs[reference.pack]!) + "?block=" + reference.offset + "-" + reference.bytes;
     }
 
-    /** This bundle's persistent cache; caches of other bundles are dropped when it is first opened. */
-    private persistent(): Promise<Cache | null> {
-        this.persistentCache ??= (async () => {
-            if (typeof caches === 'undefined') return null;
-            try {
-                const name = PERSISTENT_PREFIX + this.baseUrl;
-                for (const other of await caches.keys()) {
-                    if (other.startsWith(PERSISTENT_PREFIX) && other !== name) await caches.delete(other);
-                }
-                return await caches.open(name);
-            } catch {
-                return null;
+    private packUrl(path: string): string {
+        if (!path) throw new Error('search bundle names a missing pack');
+        return new URL(path, new URL(this.baseUrl + '/', globalThis.location?.href)).href;
+    }
+
+    private cacheName(url: string): string {
+        return PERSISTENT_PREFIX + new URL('.', url).href;
+    }
+
+    private persistent(url: string): Promise<Cache | null> {
+        if (typeof caches === 'undefined') return Promise.resolve(null);
+        const name = this.cacheName(url);
+        const ready = this.persistentCaches.get(name) ?? caches.open(name).catch(() => null);
+        this.persistentCaches.set(name, ready);
+        return ready;
+    }
+
+    private async prune(manifest: SearchBundleManifest): Promise<void> {
+        if (typeof caches === 'undefined') return;
+        try {
+            const keep = new Set(manifest.packs.map(path => this.cacheName(this.packUrl(path))));
+            const parent = PERSISTENT_PREFIX + new URL('..', this.packUrl('manifest.json')).href;
+            for (const name of await caches.keys()) {
+                if (name.startsWith(parent) && !keep.has(name)) await caches.delete(name);
             }
-        })();
-        return this.persistentCache;
+        } catch { /* Cache Storage is optional. */ }
     }
 
     /** Keep the slot until the body is consumed: HTTP/2 streams outlive response headers. */
